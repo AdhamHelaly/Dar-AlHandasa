@@ -41,6 +41,7 @@ assert(env.ADMIN_EMAIL && env.ADMIN_PASSWORD && !/example\.invalid|replace-with/
 assert(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(env.STAGING_TEST_PRODUCT_ID || '') && !/^00000000-0000-4000-8000-000000000000$/i.test(env.STAGING_TEST_PRODUCT_ID), 'Set STAGING_TEST_PRODUCT_ID to a disposable active staging product.');
 const apiUrl = new URL(env.STAGING_API_URL || 'http://127.0.0.1:3000/api');
 assert(['127.0.0.1', 'localhost', '::1'].includes(apiUrl.hostname), 'Staging test API must be a loopback address; remote and production API hosts are blocked.');
+assert(apiUrl.origin === 'http://127.0.0.1:3203' && apiUrl.pathname.replace(/\/$/, '') === '/api', 'Staging order tests are pinned to http://127.0.0.1:3203/api; no other API target is permitted.');
 const apiBase = apiUrl.href.replace(/\/+$/, '');
 const productId = env.STAGING_TEST_PRODUCT_ID;
 const runId = randomUUID();
@@ -74,14 +75,19 @@ async function request(path, { method = 'GET', body, token = adminToken } = {}) 
 function pass(message) { console.log(`PASS ${message}`); }
 
 async function verifyTargetAndLogin(requireWorker) {
-  const health = await request('/health', { token: '' });
-  assert(health.status === 200 && health.data?.status === 'ok', 'Staging API health check failed; no order was created.');
-  assert(health.data.environment === 'staging' && health.data.supabaseProjectRef === stagingRef, 'API is not connected to the configured staging project; no order was created.');
+  const health = await verifyStagingTarget();
   if (requireWorker) assert(health.data.reservationWorker?.enabled && health.data.reservationWorker?.scheduled, 'Staging expiry suite requires the worker enabled and scheduled; no order was created.');
   const login = await request('/admin/login', { method: 'POST', token: '', body: { email: env.ADMIN_EMAIL, password: env.ADMIN_PASSWORD } });
   assert(login.status === 200 && login.data?.token, 'Staging admin login failed; no order was created.');
   adminToken = login.data.token;
   pass(`API health and staging target ${stagingRef} verified${requireWorker ? ' with expiry worker scheduled' : ''}`);
+}
+
+async function verifyStagingTarget() {
+  const health = await request('/health', { token: '' });
+  assert(health.status === 200 && health.data?.status === 'ok', 'Staging API health check failed; the pending write was not sent.');
+  assert(health.data.environment === 'staging' && health.data.supabaseProjectRef === stagingRef && stagingRef !== productionRef, 'API is not connected to the exact Staging project; the pending write was not sent.');
+  return health;
 }
 
 async function loadProduct() {
@@ -99,17 +105,36 @@ async function loadMovements() {
 }
 
 async function createOrder(method, quantity, idempotencyKey, overrides = {}) {
-  const result = await request('/orders', {
-    method: 'POST', token: '',
-    body: { ...customer, method, items: [{ id: productId, quantity }], idempotencyKey, ...overrides }
-  });
+  await verifyStagingTarget();
+  let result;
+  try {
+    result = await request('/orders', {
+      method: 'POST', token: '',
+      body: { ...customer, method, items: [{ id: productId, quantity }], idempotencyKey, ...overrides }
+    });
+  } catch (error) {
+    // A transport failure is ambiguous: reconcile by the unique idempotency key and never replay blindly.
+    const orders = await getOrdersForReconciliation().catch(() => []);
+    const matches = orders.filter(order => order.idempotency_key === idempotencyKey);
+    if (matches.length === 1) createdOrderIds.add(matches[0].id);
+    throw new Error(matches.length === 1
+      ? 'Order request outcome was uncertain; the exact idempotency key was reconciled read-only and was not retried.'
+      : 'Order request outcome was uncertain; no retry was sent and automatic cleanup will not guess an order ID.', { cause: error });
+  }
   if (result.data?.orderId) createdOrderIds.add(result.data.orderId);
   return result;
 }
 
 async function cancelOrder(orderId) {
+  await verifyStagingTarget();
   const result = await request(`/admin/orders/${orderId}/status`, { method: 'PATCH', body: { status: 'cancelled' } });
   assert(result.status === 200, `Could not cancel staging order ${orderId.slice(0, 8)} for cleanup.`);
+}
+
+async function getOrdersForReconciliation() {
+  const result = await request('/admin/orders');
+  assert(result.status === 200 && Array.isArray(result.data?.orders), 'Could not reconcile an uncertain staging order submission.');
+  return result.data.orders;
 }
 
 async function getOrder(orderId) {
@@ -120,13 +145,28 @@ async function getOrder(orderId) {
 
 async function runCheckoutSuite() {
   const baseline = await loadProduct();
+  assert(baseline.sku === 'STAGE-20261121-672B643111' && Number(baseline.price) === 1500 && baseline.active === true, 'The configured fixture must be the published Staging product at 1500 EGP.');
+  assert(Number(baseline.stock) === 12, 'The Staging fixture baseline must be exactly 12 before the suite begins.');
   assert(Number(baseline.stock) >= 1, 'Staging fixture needs at least one unit of stock.');
 
   const beforeWebsiteMovements = await loadMovements();
+  const invalidPayloadBaseline = Number(baseline.stock);
+  const overstock = await createOrder('website', invalidPayloadBaseline + 1, randomUUID());
+  assert(overstock.status === 409 && overstock.data?.error === 'insufficient_stock', 'An order above available Staging stock was not rejected.');
+  const unavailable = await createOrder('website', 1, randomUUID(), { items: [{ id: randomUUID(), quantity: 1 }] });
+  assert(unavailable.status === 409 && unavailable.data?.error === 'product_unavailable', 'An unavailable Staging product was not rejected.');
+  const invalidDelivery = await createOrder('website', 1, randomUUID(), { address: '' });
+  assert(invalidDelivery.status === 400 && invalidDelivery.data?.error === 'invalid_order', 'Missing required delivery details were not rejected.');
+  assert(Number((await loadProduct()).stock) === invalidPayloadBaseline, 'Rejected checkout requests changed the Staging fixture stock.');
+  assert((await loadMovements()).length === beforeWebsiteMovements.length, 'Rejected checkout requests created inventory movements.');
+  pass('overstock, unavailable-product, and invalid-delivery requests rejected without Staging data changes');
+
   const websiteKey = randomUUID();
   const website = await createOrder('website', 1, websiteKey, { items: [{ id: productId, quantity: 1, price: 0.01 }] });
   assert(website.status === 201 && website.data?.orderId, 'Website checkout did not create one staging order.');
   assert(Number(website.data.items?.[0]?.price) === Number(baseline.price), 'Submitted frontend price was trusted instead of the staging database price.');
+  assert(website.data.items?.[0]?.sku === baseline.sku && website.data.items?.[0]?.name === baseline.name && Number(website.data.items?.[0]?.quantity) === 1, 'Order item snapshot does not match the Staging product and requested quantity.');
+  assert(Number(website.data.total) === Number(baseline.price), 'Order total does not match the server-calculated price plus configured Staging delivery fee.');
   const websiteRetry = await createOrder('website', 1, websiteKey);
   assert(websiteRetry.status === 200 && websiteRetry.data?.orderId === website.data.orderId && websiteRetry.data?.replayed === true, 'Website retry did not replay the same order.');
   const conflict = await createOrder('website', 1, websiteKey, { address: `${customer.address} changed` });
@@ -135,6 +175,7 @@ async function runCheckoutSuite() {
   assert((await loadMovements()).length === beforeWebsiteMovements.length + 1, 'Website replay caused an unexpected stock movement.');
   const websiteOrder = await getOrder(website.data.orderId);
   assert(websiteOrder?.status === 'pending', 'Website order did not remain pending before cancellation.');
+  assert(websiteOrder.customer_name === customer.name && websiteOrder.customer_phone === customer.phone && websiteOrder.delivery_address === customer.address, 'Synthetic customer or delivery details were not persisted to the Staging order.');
   await cancelOrder(website.data.orderId);
   await cancelOrder(website.data.orderId);
   assert(Number((await loadProduct()).stock) === Number(baseline.stock), 'Repeated cancellation did not restore stock exactly once.');
@@ -148,6 +189,10 @@ async function runCheckoutSuite() {
   assert(whatsapp?.data?.orderId && whatsapp.data?.whatsappUrl && whatsapp.data?.reservationExpiresAt, 'Concurrent WhatsApp checkout did not return its initial order, link, and expiry.');
   assert(firstWhatsAppAttempts.filter(result => result.status === 201).length === 1 && firstWhatsAppAttempts.every(result => [200, 201].includes(result.status) && result.data?.orderId === whatsapp.data.orderId && result.data?.whatsappUrl === whatsapp.data.whatsappUrl), 'Concurrent same-key WhatsApp submissions created inconsistent orders or messages.');
   assert(Number((await loadProduct()).stock) === Number(baseline.stock) - 1, 'WhatsApp retries reserved more than one unit.');
+  const expiryDelta = Date.parse(whatsapp.data.reservationExpiresAt) - Date.now();
+  assert(Number.isFinite(expiryDelta) && Math.abs(expiryDelta - 30 * 60_000) < 2 * 60_000, 'WhatsApp reservation does not expire approximately 30 minutes after creation.');
+  const preparedMessage = new URL(whatsapp.data.whatsappUrl).searchParams.get('text') || '';
+  assert(preparedMessage.includes(baseline.sku) && preparedMessage.includes(baseline.name) && preparedMessage.includes('الكمية: 1') && preparedMessage.includes('1500.00 ج.م') && preparedMessage.includes(customer.address), 'Prepared WhatsApp message is missing the Staging order/product snapshot.');
   assert((await loadMovements()).length === beforeWhatsAppMovements.length + 1, 'WhatsApp retries created more than one stock movement.');
   await cancelOrder(whatsapp.data.orderId);
   await cancelOrder(whatsapp.data.orderId);
@@ -227,5 +272,6 @@ try {
   console.log('Staging order suite completed. No production API or project was targeted.');
 } finally {
   await cleanupPendingOrders();
+  console.log(`Staging test order IDs: ${JSON.stringify([...createdOrderIds])}`);
   adminToken = '';
 }

@@ -15,11 +15,17 @@ type ImportRow = { row: number; sku: string; name: string; category: string; bra
 type CartLine = { product: Product; quantity: number };
 type SiteSettings = { business_name?: string; currency?: string; phone?: string; whatsapp?: string; whatsapp_link?: string; instapay_number?: string; wallet_number?: string; facebook_url?: string; instagram_url?: string; email?: string; business_hours?: string; address?: string; delivery_enabled?: string; delivery_fee?: string; delivery_note?: string; hero_title?: string; hero_subtitle?: string; hero_description?: string };
 
-const imageTestGatewayRequested = isDevMode()
+const localDevelopmentOrigin = isDevMode()
   && typeof window !== 'undefined'
-  && window.location.origin === 'http://127.0.0.1:4200'
-  && new URLSearchParams(window.location.search).get('productImageTestGateway') === '1';
-const API = `${imageTestGatewayRequested ? 'http://127.0.0.1:3104' : 'http://127.0.0.1:3000'}/api`;
+  && window.location.origin === 'http://127.0.0.1:4200';
+const localApiSwitches = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+const stagingApiRequested = localDevelopmentOrigin
+  && localApiSwitches?.get('stagingTest') === '1'
+  && localApiSwitches?.get('productImageTestGateway') !== '1';
+const imageTestGatewayRequested = localDevelopmentOrigin
+  && localApiSwitches?.get('productImageTestGateway') === '1'
+  && localApiSwitches?.get('stagingTest') !== '1';
+const API = `http://127.0.0.1:${stagingApiRequested ? '3203' : imageTestGatewayRequested ? '3104' : '3000'}/api`;
 const OFFICIAL_CONTACT: SiteSettings = {
   phone: '01099005307', whatsapp: '01099005307', whatsapp_link: 'https://wa.me/201099005307',
   instapay_number: '01099005307', wallet_number: '01500074015',
