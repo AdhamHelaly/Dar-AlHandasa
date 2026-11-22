@@ -10,14 +10,17 @@ export type CatalogProduct = {
 export type CatalogFilters = {
   searchText: string;
   selectedCategory: string;
+  selectedBrand?: string;
   minPrice: number;
   maxPrice: number;
   sort: string;
 };
 
 export function filterCatalog<T extends CatalogProduct>(products: T[], filters: CatalogFilters): T[] {
+  const selectedBrand = filters.selectedBrand?.trim().toLocaleLowerCase() || '';
   let rows = products.filter(product =>
     (!filters.selectedCategory || product.category === filters.selectedCategory)
+    && (!selectedBrand || (typeof product.brand === 'string' && product.brand.trim().toLocaleLowerCase() === selectedBrand))
     && product.price >= filters.minPrice
     && product.price <= filters.maxPrice
   );
@@ -25,7 +28,7 @@ export function filterCatalog<T extends CatalogProduct>(products: T[], filters: 
   const query = filters.searchText.trim().toLocaleLowerCase();
   if (query) {
     rows = rows.filter(product =>
-      `${product.name} ${product.brand} ${product.category} ${product.sku}`.toLocaleLowerCase().includes(query)
+      `${product.name} ${product.brand || ''} ${product.category} ${product.sku}`.toLocaleLowerCase().includes(query)
     );
   }
 

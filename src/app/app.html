@@ -44,7 +44,82 @@
     }
     @case ('shop') {
       <section class="page-hero"><div class="wrap"><div class="breadcrumbs"><a routerLink="/">الرئيسية</a><span>/</span><b>المتجر</b></div><span class="eyebrow">كتالوج المتجر</span><h1>المتجر</h1><p>استكشف أقسام الأدوات والمعدات الهندسية.</p></div></section>
-      <section class="wrap shop-layout"><aside class="filters"><div class="filter-title"><h3>تصفية المنتجات</h3><button class="text-link" (click)="clearFilters()">مسح الكل</button></div><div class="filter-group"><b>السعر (ج.م)</b><label>من <input type="number" min="0" [(ngModel)]="minPrice"></label><label>إلى <input type="number" min="0" [(ngModel)]="maxPrice"></label></div><div class="filter-group"><b>التصنيفات</b>@for (category of categories; track category.name) {<button class="filter-option" [class.chosen]="selectedCategory===category.name" (click)="selectedCategory=selectedCategory===category.name?'':category.name"><span>{{category.name}}</span><i>{{category.icon}}</i></button>}</div><div class="demo-alert">تظهر المنتجات النشطة المحفوظة في قاعدة البيانات فقط.</div></aside><div class="shop-main"><div class="shop-toolbar"><div>@if(productsLoading){<span role="status">جارٍ تحميل المنتجات…</span>}@else if(productsError){<span role="alert">{{productsError}}</span> <button class="quiet" type="button" (click)="loadProducts()">إعادة المحاولة</button>}@else{<b>{{filteredProducts().length}}</b> منتج <span class="muted">· نتائج قاعدة البيانات</span>}</div><label>ترتيب حسب <select [(ngModel)]="sort"><option value="featured">المقترحة</option><option value="low">السعر: الأقل أولاً</option><option value="high">السعر: الأعلى أولاً</option><option value="name">الاسم</option></select></label></div><div class="active-filter">@if (selectedCategory) {<button (click)="selectedCategory=''">{{selectedCategory}} ×</button>} @if (searchText) {<span>نتائج البحث عن: {{searchText}}</span>}</div><div class="product-grid">@if(productsLoading){<div class="empty-state" role="status">جارٍ تحميل المنتجات…</div>}@else if(productsError){<div class="empty-state" role="alert"><b>{{productsError}}</b><button class="btn btn-outline" type="button" (click)="loadProducts()">إعادة المحاولة</button></div>}@else if(filteredProducts().length){@for (product of filteredProducts(); track product.id) {<ng-container *ngTemplateOutlet="productCard; context: {$implicit: product}"></ng-container>}}@else{<div class="empty-state"><b>لم نعثر على منتجات</b><p>جرّب تغيير كلمات البحث أو التصنيف.</p><button class="btn btn-outline" (click)="clearFilters()">مسح الفلاتر</button></div>}</div></div></section>
+      <section class="wrap shop-layout">
+        @if (mobileFiltersOpen) {
+          <div class="filters-backdrop" (click)="closeMobileFilters()" role="presentation"></div>
+        }
+        <aside class="filters" [class.mobile-open]="mobileFiltersOpen">
+          <div class="filter-title">
+            <h3>تصفية المنتجات</h3>
+            <div class="filter-actions">
+              <button type="button" class="text-link" (click)="clearFilters()">مسح الكل</button>
+              <button type="button" class="quiet filter-close-btn" (click)="closeMobileFilters()" aria-label="إغلاق التصفية">×</button>
+            </div>
+          </div>
+          <div class="filter-group">
+            <b>السعر (ج.م)</b>
+            <div class="price-inputs">
+              <label>من <input type="number" min="0" [(ngModel)]="minPrice"></label>
+              <label>إلى <input type="number" min="0" [(ngModel)]="maxPrice"></label>
+            </div>
+          </div>
+          <div class="filter-group">
+            <b>التصنيفات</b>
+            <div class="category-list-scroll">
+              @for (category of categories; track category.name) {
+                <button type="button" class="filter-option" [class.chosen]="selectedCategory===category.name" (click)="toggleCategory(category.name)">
+                  <span>{{category.name}}</span><i>{{category.icon}}</i>
+                </button>
+              }
+            </div>
+          </div>
+          @if (availableBrands().length) {
+            <div class="filter-group">
+              <b>العلامات التجارية</b>
+              <div class="brand-list-scroll">
+                @for (brand of availableBrands(); track brand) {
+                  <button type="button" class="filter-option" [class.chosen]="isBrandSelected(brand)" (click)="toggleBrand(brand)">
+                    <span>{{brand}}</span>
+                    @if (isBrandSelected(brand)) {<i>✓</i>}
+                  </button>
+                }
+              </div>
+            </div>
+          }
+          <div class="mobile-filter-footer">
+            <button type="button" class="btn btn-primary full" (click)="closeMobileFilters()">تطبيق الفلاتر</button>
+          </div>
+          <div class="demo-alert">تظهر المنتجات النشطة المحفوظة في قاعدة البيانات فقط.</div>
+        </aside>
+        <div class="shop-main">
+          <div class="shop-toolbar">
+            <button type="button" class="mobile-filter-toggle" (click)="toggleMobileFilters()" aria-label="فتح تصفية المنتجات">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" x2="20" y1="6" y2="6"/><line x1="7" x2="17" y1="12" y2="12"/><line x1="10" x2="14" y1="18" y2="18"/></svg>
+              <span>تصفية المنتجات</span>
+              @if (activeFilterCount() > 0) {
+                <span class="filter-count-badge">{{activeFilterCount()}}</span>
+              }
+            </button>
+            <div class="shop-count">
+              @if(productsLoading){<span role="status">جارٍ تحميل المنتجات…</span>}
+              @else if(productsError){<span role="alert">{{productsError}}</span> <button class="quiet" type="button" (click)="loadProducts()">إعادة المحاولة</button>}
+              @else{<b>{{filteredProducts().length}}</b> منتج <span class="muted">· نتائج قاعدة البيانات</span>}
+            </div>
+            <label class="sort-label">ترتيب حسب <select [(ngModel)]="sort"><option value="featured">المقترحة</option><option value="low">السعر: الأقل أولاً</option><option value="high">السعر: الأعلى أولاً</option><option value="name">الاسم</option></select></label>
+          </div>
+          <div class="active-filter">
+            @if (selectedCategory) {<button (click)="clearCategory()">{{selectedCategory}} ×</button>}
+            @if (selectedBrand) {<button (click)="clearBrand()">{{selectedBrand}} ×</button>}
+            @if (searchText) {<span>نتائج البحث عن: {{searchText}}</span>}
+          </div>
+          <div class="product-grid">
+            @if(productsLoading){<div class="empty-state" role="status">جارٍ تحميل المنتجات…</div>}
+            @else if(productsError){<div class="empty-state" role="alert"><b>{{productsError}}</b><button class="btn btn-outline" type="button" (click)="loadProducts()">إعادة المحاولة</button></div>}
+            @else if(filteredProducts().length){@for (product of filteredProducts(); track product.id) {<ng-container *ngTemplateOutlet="productCard; context: {$implicit: product}"></ng-container>}}
+            @else{<div class="empty-state"><b>لم نعثر على منتجات</b><p>جرّب تغيير كلمات البحث أو التصنيف.</p><button class="btn btn-outline" (click)="clearFilters()">مسح الفلاتر</button></div>}
+          </div>
+        </div>
+      </section>
     }
     @case ('product') {
       @if (productsLoading) {<section class="wrap inner-page"><div class="empty-state" role="status">جارٍ تحميل بيانات المنتج…</div></section>} @else if(productsError){<section class="wrap inner-page"><div class="empty-state" role="alert"><p>{{productsError}}</p><button class="btn btn-primary" type="button" (click)="loadProducts()">إعادة المحاولة</button></div></section>} @else if (selectedProduct; as product) {<section class="wrap product-detail"><div class="breadcrumbs"><a routerLink="/">الرئيسية</a><span>/</span><a routerLink="/shop">المتجر</a><span>/</span><b>{{product.name}}</b></div><div class="detail-columns"><div class="detail-image"><img [src]="product.image || 'assets/hero-tools.png'" [alt]="product.name" loading="lazy" decoding="async" (error)="onProductImageError($event)"></div><div class="detail-copy"><span class="eyebrow blue">{{product.category}}</span><h1>{{product.name}}</h1><div class="detail-meta"><span>{{product.brand}}</span><span>رمز المنتج: {{product.sku}}</span></div><div class="detail-price">{{money(product.price)}}</div><div class="stock" [class.out]="product.stock < 1"><i></i>{{product.stock > 0 ? 'متاح · الكمية ' + product.stock : 'غير متاح'}}</div><p>{{product.description}}</p><div class="detail-actions"><button class="btn btn-primary" [disabled]="product.stock < 1" (click)="addToCart(product)">أضف إلى السلة</button><a class="btn btn-outline" routerLink="/request-quote">اطلب عرض سعر</a></div><div class="details-table"><div><span>التصنيف</span><b>{{product.category}}</b></div><div><span>العلامة التجارية</span><b>{{product.brand}}</b></div><div><span>رمز المنتج</span><b>{{product.sku}}</b></div></div></div></div></section>} @else {<section class="wrap inner-page"><div class="empty-state"><h1>المنتج غير متاح</h1><p>قد يكون المنتج غير موجود أو مؤرشفاً.</p><a class="btn btn-primary" routerLink="/shop">العودة إلى المتجر</a></div></section>}

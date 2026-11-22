@@ -48,6 +48,9 @@ export class App {
   private selectedCategoryState = '';
   get selectedCategory(): string { return this.selectedCategoryState; }
   set selectedCategory(value: string) { this.selectedCategoryState = value; this.filterRevision.update(revision => revision + 1); }
+  private selectedBrandState = '';
+  get selectedBrand(): string { return this.selectedBrandState; }
+  set selectedBrand(value: string) { this.selectedBrandState = value; this.filterRevision.update(revision => revision + 1); }
   private sortState = 'featured';
   get sort(): string { return this.sortState; }
   set sort(value: string) { this.sortState = value; this.filterRevision.update(revision => revision + 1); }
@@ -61,9 +64,11 @@ export class App {
   productsError = '';
   private productsRequestId = 0;
   categories: { id?: string; name: string; icon: string }[] = [];
+  brands: { id?: string; name: string }[] = [];
   page = 'home';
   searchOpen = false;
   mobileMenu = false;
+  mobileFiltersOpen = false;
   cartOpen = false;
   selectedProduct: Product | undefined;
   message = '';
@@ -135,25 +140,52 @@ export class App {
   cartCount = computed(() => this.cart().reduce((sum, line) => sum + line.quantity, 0));
   cartTotal = computed(() => this.cart().reduce((sum, line) => sum + line.product.price * line.quantity, 0));
   cartHasUnavailableItems = computed(() => this.cart().some(line => !!this.cartLineIssue(line)));
+  availableBrands = computed(() => {
+    this.filterRevision();
+    const map = new Map<string, string>();
+    for (const b of this.brands) {
+      const name = b.name?.trim();
+      if (name) map.set(name.toLocaleLowerCase(), name);
+    }
+    for (const p of this.products) {
+      const brand = p.brand?.trim();
+      if (brand) {
+        const key = brand.toLocaleLowerCase();
+        if (!map.has(key)) map.set(key, brand);
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b, 'ar'));
+  });
   filteredProducts = computed(() => {
     this.filterRevision();
     return filterCatalog(this.products, {
       searchText: this.searchText,
       selectedCategory: this.selectedCategory,
+      selectedBrand: this.selectedBrand,
       minPrice: this.minPrice,
       maxPrice: this.maxPrice,
       sort: this.sort
     });
   });
+  activeFilterCount = computed(() => {
+    this.filterRevision();
+    let count = 0;
+    if (this.selectedCategory) count++;
+    if (this.selectedBrand) count++;
+    if (this.minPrice > 0) count++;
+    if (this.maxPrice < Number.MAX_SAFE_INTEGER) count++;
+    return count;
+  });
 
   constructor(private router: Router, private http: HttpClient, private cdr: ChangeDetectorRef) {
     this.router.events.pipe(filter((event): event is NavigationEnd => event instanceof NavigationEnd)).subscribe(() => {
-      this.syncPage(); this.mobileMenu = false; window.scrollTo({ top: 0, behavior: 'smooth' });
+      this.syncPage(); this.mobileMenu = false; this.mobileFiltersOpen = false; window.scrollTo({ top: 0, behavior: 'smooth' });
     });
     this.syncPage();
     this.loadProducts();
     this.loadSiteInfo();
     this.loadCategories();
+    this.loadBrands();
     if (this.adminToken) this.loadAdminData();
   }
   private syncPage() {
@@ -166,8 +198,13 @@ export class App {
     } else {
       this.selectedProduct = undefined;
     }
-    if (this.page === 'shop') { this.selectedCategory = new URLSearchParams(location.search).get('category') || ''; this.searchText = ''; }
-    if (this.page === 'search') this.searchText = new URLSearchParams(location.search).get('q') || this.searchText;
+    if (this.page === 'shop') {
+      const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
+      this.selectedCategory = params.get('category') || '';
+      this.selectedBrand = params.get('brand') || '';
+      this.searchText = '';
+    }
+    if (this.page === 'search') this.searchText = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '').get('q') || this.searchText;
     this.cdr.markForCheck();
   }
   private readCart(): CartLine[] {
@@ -215,6 +252,19 @@ export class App {
     });
   }
   private loadCategories() { this.http.get<{ categories: { id: string; name: string; icon?: string }[] }>(`${API}/categories`).subscribe({ next: response => { this.categories = (response.categories || []).map(row => ({ ...row, icon:row.icon || '⚙' })); this.cdr.markForCheck(); }, error: () => { this.categories = []; this.cdr.markForCheck(); } }); }
+  private loadBrands() {
+    this.http.get<{ brands: { id: string; name: string }[] }>(`${API}/brands`).subscribe({
+      next: response => {
+        this.brands = (response.brands || []).filter(row => row?.name);
+        this.filterRevision.update(revision => revision + 1);
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.brands = [];
+        this.cdr.markForCheck();
+      }
+    });
+  }
   private loadSiteInfo() { this.http.get<{ settings: SiteSettings; branches: any[] }>(`${API}/site`).subscribe({ next: response => { this.siteSettings = { ...OFFICIAL_CONTACT, ...(response.settings || {}) }; this.publicBranches = response.branches || []; this.cdr.markForCheck(); }, error: () => {} }); }
   private saveCart() { localStorage.setItem('dar-handasa-cart', JSON.stringify(this.cart())); }
   addToCart(product: Product, quantity = 1) {
@@ -248,9 +298,59 @@ export class App {
   removeFromCart(id: string) { this.cart.set(this.cart().filter(row => row.product.id !== id)); this.saveCart(); }
   showMessage(text: string) { this.message = text; window.setTimeout(() => this.message = '', 2800); }
   openProduct(product: Product) { this.router.navigate(['/product', product.sku]); }
-  goShop(category = '') { this.selectedCategory = category; this.router.navigate(['/shop'], { queryParams: category ? { category } : {} }); }
+  goShop(category = '', brand = '') {
+    this.selectedCategory = category;
+    this.selectedBrand = brand;
+    const queryParams: Record<string, string> = {};
+    if (category) queryParams['category'] = category;
+    if (brand) queryParams['brand'] = brand;
+    this.router.navigate(['/shop'], { queryParams: Object.keys(queryParams).length ? queryParams : undefined });
+  }
+  private syncShopUrl() {
+    if (typeof window === 'undefined' || this.page !== 'shop') return;
+    const params = new URLSearchParams(window.location.search);
+    if (this.selectedCategory) params.set('category', this.selectedCategory);
+    else params.delete('category');
+    if (this.selectedBrand) params.set('brand', this.selectedBrand);
+    else params.delete('brand');
+    const qs = params.toString();
+    const newUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+    window.history.replaceState(null, '', newUrl);
+  }
+  toggleCategory(category: string) {
+    this.selectedCategory = this.selectedCategory === category ? '' : category;
+    this.syncShopUrl();
+  }
+  toggleBrand(brand: string) {
+    this.selectedBrand = this.isBrandSelected(brand) ? '' : brand;
+    this.syncShopUrl();
+  }
+  clearCategory() {
+    this.selectedCategory = '';
+    this.syncShopUrl();
+  }
+  clearBrand() {
+    this.selectedBrand = '';
+    this.syncShopUrl();
+  }
+  isBrandSelected(brand: string): boolean {
+    return Boolean(this.selectedBrand && this.selectedBrand.trim().toLocaleLowerCase() === brand.trim().toLocaleLowerCase());
+  }
   doSearch() { this.searchOpen = false; this.router.navigate(['/search'], { queryParams: { q: this.searchText.trim() } }); }
-  clearFilters() { this.selectedCategory = ''; this.minPrice = 0; this.maxPrice = Number.MAX_SAFE_INTEGER; this.sort = 'featured'; this.router.navigate(['/shop']); }
+  clearFilters() {
+    this.selectedCategory = '';
+    this.selectedBrand = '';
+    this.minPrice = 0;
+    this.maxPrice = Number.MAX_SAFE_INTEGER;
+    this.sort = 'featured';
+    this.router.navigate(['/shop']);
+  }
+  toggleMobileFilters() {
+    this.mobileFiltersOpen = !this.mobileFiltersOpen;
+  }
+  closeMobileFilters() {
+    this.mobileFiltersOpen = false;
+  }
   submitUnavailable(formName: string, valid: boolean | null) {
     if (valid !== true) { this.showMessage('راجع الحقول المطلوبة وتأكد من صحة رقم الهاتف والبريد الإلكتروني.'); return; }
     this.showMessage(`النموذج جاهز، لكن لم يتم إرساله: يلزم ربط ${formName} بخادم الموقع أولاً.`);

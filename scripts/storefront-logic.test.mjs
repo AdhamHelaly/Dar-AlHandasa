@@ -9,6 +9,10 @@ const logic = await import(`data:text/javascript;base64,${Buffer.from(javascript
 
 const nailer = { id: 'nailer', name: 'TOTAL 20V Brushless Battery Nailer', brand: 'TOTAL', category: 'Power Tools', price: 7000, sku: 'TCBNLI500857', stock: 3 };
 const drill = { id: 'drill', name: 'Test Drill', brand: 'Other', category: 'Drills', price: 5000, sku: 'DRILL-1', stock: 5 };
+const grinder = { id: 'grinder', name: 'TOTAL 4-Inch Angle Grinder', brand: 'total', category: 'Power Tools', price: 3200, sku: 'TG1081006', stock: 6 };
+const sander = { id: 'sander', name: 'INGCO Palm Sander', brand: 'INGCO', category: 'Power Tools', price: 2100, sku: 'PS3208', stock: 4 };
+const emptyBrand = { id: 'emptyBrand', name: 'Generic Screw Bit Set', brand: '', category: 'Accessories', price: 450, sku: 'BIT-01', stock: 15 };
+const missingBrand = { id: 'missingBrand', name: 'Unbranded Utility Knife', category: 'Hand Tools', price: 120, sku: 'KNIFE-01', stock: 20 };
 
 test('search matches exact SKU TCBNLI500857', () => {
   assert.deepEqual(logic.filterCatalog([nailer, drill], { searchText: 'TCBNLI500857', selectedCategory: '', minPrice: 0, maxPrice: Number.MAX_SAFE_INTEGER, sort: 'featured' }).map(row => row.id), ['nailer']);
@@ -28,6 +32,140 @@ test('clearing filters restores the full catalog', () => {
 
 test('category filtering remains active independently of other filters', () => {
   assert.deepEqual(logic.filterCatalog([nailer, drill], { searchText: '', selectedCategory: 'Power Tools', minPrice: 0, maxPrice: Number.MAX_SAFE_INTEGER, sort: 'featured' }).map(row => row.id), ['nailer']);
+});
+
+test('filtering by one brand returns only products of that brand', () => {
+  const result = logic.filterCatalog([nailer, drill, grinder, sander], {
+    searchText: '',
+    selectedCategory: '',
+    selectedBrand: 'INGCO',
+    minPrice: 0,
+    maxPrice: Number.MAX_SAFE_INTEGER,
+    sort: 'featured'
+  });
+  assert.deepEqual(result.map(row => row.id), ['sander']);
+});
+
+test('case-insensitive brand matching matches regardless of casing', () => {
+  const lowerResult = logic.filterCatalog([nailer, drill, grinder, sander], {
+    searchText: '',
+    selectedCategory: '',
+    selectedBrand: 'total',
+    minPrice: 0,
+    maxPrice: Number.MAX_SAFE_INTEGER,
+    sort: 'featured'
+  });
+  assert.deepEqual(lowerResult.map(row => row.id), ['nailer', 'grinder']);
+
+  const mixedResult = logic.filterCatalog([nailer, drill, grinder, sander], {
+    searchText: '',
+    selectedCategory: '',
+    selectedBrand: 'ToTaL',
+    minPrice: 0,
+    maxPrice: Number.MAX_SAFE_INTEGER,
+    sort: 'featured'
+  });
+  assert.deepEqual(mixedResult.map(row => row.id), ['nailer', 'grinder']);
+});
+
+test('brand and category combination filters by both criteria simultaneously', () => {
+  const matched = logic.filterCatalog([nailer, drill, grinder, sander], {
+    searchText: '',
+    selectedCategory: 'Power Tools',
+    selectedBrand: 'TOTAL',
+    minPrice: 0,
+    maxPrice: Number.MAX_SAFE_INTEGER,
+    sort: 'featured'
+  });
+  assert.deepEqual(matched.map(row => row.id), ['nailer', 'grinder']);
+
+  const emptyIntersection = logic.filterCatalog([nailer, drill, grinder, sander], {
+    searchText: '',
+    selectedCategory: 'Drills',
+    selectedBrand: 'TOTAL',
+    minPrice: 0,
+    maxPrice: Number.MAX_SAFE_INTEGER,
+    sort: 'featured'
+  });
+  assert.deepEqual(emptyIntersection, []);
+});
+
+test('brand and price range combination filters by brand within price bounds', () => {
+  const lowPriceTotal = logic.filterCatalog([nailer, grinder, sander], {
+    searchText: '',
+    selectedCategory: '',
+    selectedBrand: 'TOTAL',
+    minPrice: 3000,
+    maxPrice: 4000,
+    sort: 'featured'
+  });
+  assert.deepEqual(lowPriceTotal.map(row => row.id), ['grinder']);
+
+  const highPriceTotal = logic.filterCatalog([nailer, grinder, sander], {
+    searchText: '',
+    selectedCategory: '',
+    selectedBrand: 'TOTAL',
+    minPrice: 6000,
+    maxPrice: 8000,
+    sort: 'featured'
+  });
+  assert.deepEqual(highPriceTotal.map(row => row.id), ['nailer']);
+});
+
+test('search within a selected brand scopes query to that brand only', () => {
+  const brandSearch = logic.filterCatalog([nailer, grinder, sander], {
+    searchText: 'Grinder',
+    selectedCategory: '',
+    selectedBrand: 'TOTAL',
+    minPrice: 0,
+    maxPrice: Number.MAX_SAFE_INTEGER,
+    sort: 'featured'
+  });
+  assert.deepEqual(brandSearch.map(row => row.id), ['grinder']);
+
+  const foreignSearch = logic.filterCatalog([nailer, grinder, sander], {
+    searchText: 'Sander',
+    selectedCategory: '',
+    selectedBrand: 'TOTAL',
+    minPrice: 0,
+    maxPrice: Number.MAX_SAFE_INTEGER,
+    sort: 'featured'
+  });
+  assert.deepEqual(foreignSearch, []);
+});
+
+test('clearing the selected brand restores all matching products', () => {
+  const allBrands = logic.filterCatalog([nailer, drill, grinder, sander], {
+    searchText: '',
+    selectedCategory: '',
+    selectedBrand: '',
+    minPrice: 0,
+    maxPrice: Number.MAX_SAFE_INTEGER,
+    sort: 'featured'
+  });
+  assert.equal(allBrands.length, 4);
+});
+
+test('products with missing or empty brand values are handled safely', () => {
+  const filtered = logic.filterCatalog([nailer, emptyBrand, missingBrand], {
+    searchText: '',
+    selectedCategory: '',
+    selectedBrand: 'TOTAL',
+    minPrice: 0,
+    maxPrice: Number.MAX_SAFE_INTEGER,
+    sort: 'featured'
+  });
+  assert.deepEqual(filtered.map(row => row.id), ['nailer']);
+
+  const unFiltered = logic.filterCatalog([nailer, emptyBrand, missingBrand], {
+    searchText: '',
+    selectedCategory: '',
+    selectedBrand: '',
+    minPrice: 0,
+    maxPrice: Number.MAX_SAFE_INTEGER,
+    sort: 'featured'
+  });
+  assert.deepEqual(unFiltered.map(row => row.id), ['nailer', 'emptyBrand', 'missingBrand']);
 });
 
 test('cart quantity cannot exceed stock 3 and reports the cap', () => {
