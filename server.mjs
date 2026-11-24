@@ -24,9 +24,12 @@ const appEnvironment = (envArgument || process.env.APP_ENV || 'development').tri
 if (!['development', 'staging', 'production'].includes(appEnvironment)) throw new Error('APP_ENV must be development, staging, or production.');
 const envFile = join(root, appEnvironment === 'staging' ? '.env.staging' : '.env');
 if (appEnvironment === 'staging') {
-  if (!existsSync(envFile)) throw new Error('Staging environment is isolated: create .env.staging from .env.staging.example before starting.');
-  for (const key of ['APP_ENV','SUPABASE_URL','SUPABASE_SERVICE_ROLE_KEY','SESSION_SECRET','ADMIN_EMAIL','ADMIN_PASSWORD','API_HOST','API_PORT','NODE_ENV','WHATSAPP_RESERVATION_WORKER_ENABLED','FRONTEND_ORIGIN','STAGING_SUPABASE_PROJECT_REF','STAGING_API_URL','STAGING_TEST_PRODUCT_ID']) delete process.env[key];
-  Object.assign(process.env, parseEnvFile(envFile));
+  if (existsSync(envFile)) {
+    for (const key of ['APP_ENV','SUPABASE_URL','SUPABASE_SERVICE_ROLE_KEY','SESSION_SECRET','ADMIN_EMAIL','ADMIN_PASSWORD','API_HOST','API_PORT','NODE_ENV','WHATSAPP_RESERVATION_WORKER_ENABLED','FRONTEND_ORIGIN','STAGING_SUPABASE_PROJECT_REF','STAGING_API_URL','STAGING_TEST_PRODUCT_ID']) delete process.env[key];
+    Object.assign(process.env, parseEnvFile(envFile));
+  } else if (!process.env.RENDER && !process.env.IS_CLOUD_DEPLOYMENT) {
+    throw new Error('Staging environment is isolated: create .env.staging from .env.staging.example before starting.');
+  }
   if (process.env.APP_ENV?.trim().toLowerCase() !== 'staging') throw new Error('.env.staging must explicitly set APP_ENV=staging.');
 } else {
   process.env.APP_ENV = appEnvironment;
@@ -70,7 +73,11 @@ const isSingleOrderWorker = Boolean(singleOrderTargetId);
 const secret = process.env.SESSION_SECRET || randomBytes(48).toString('hex');
 const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
 const adminPassword = process.env.ADMIN_PASSWORD;
-const port = Number(process.env.API_PORT || 3000);
+const rawPort = process.env.PORT || process.env.API_PORT || 3000;
+const port = Number(rawPort);
+if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+  throw new Error(`Invalid port: ${rawPort}`);
+}
 const nodeEnvironment = process.env.NODE_ENV?.trim().toLowerCase() || 'development';
 const reservationWorkerRequested = process.env.WHATSAPP_RESERVATION_WORKER_ENABLED?.trim().toLowerCase() === 'true';
 const workerEnvironmentAllowed = ['staging', 'production'].includes(appEnvironment) && nodeEnvironment === 'production';
@@ -98,7 +105,17 @@ const reservationWorkerStatus = {
   disabledReason: reservationWorkerDisabledReason
 };
 const attempts = new Map();
-const json = (res, status, body) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': res.getHeader('Access-Control-Allow-Origin') || process.env.FRONTEND_ORIGIN || `http://127.0.0.1:4200`, 'Vary': 'Origin' }); res.end(JSON.stringify(body)); };
+const configuredFrontendOrigin = (process.env.FRONTEND_ORIGIN || '').trim().replace(/\/+$/, '');
+const json = (res, status, body) => {
+  const allowedOrigin = configuredFrontendOrigin || 'http://127.0.0.1:4200';
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': res.getHeader('Access-Control-Allow-Origin') || allowedOrigin,
+    'Vary': 'Origin'
+  });
+  res.end(JSON.stringify(body));
+};
 const clean = (value, max = 1000) => typeof value === 'string' ? value.trim().replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').slice(0, max) : '';
 const emailOk = value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const phoneOk = value => /^[0-9+()\- ]{8,18}$/.test(value);
@@ -253,7 +270,7 @@ async function cleanupPreviousProductImage(oldImage, productId, newImage) {
 
 const server = createServer(async (req, res) => {
   const origin = req.headers.origin;
-  const allowed = process.env.FRONTEND_ORIGIN || 'http://127.0.0.1:4200';
+  const allowed = configuredFrontendOrigin || 'http://127.0.0.1:4200';
   if (origin && origin !== allowed && origin !== 'http://127.0.0.1:4200') return json(res, 403, { error: 'origin_not_allowed' });
   if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
   if (req.method === 'OPTIONS') { res.writeHead(204, { 'Access-Control-Allow-Origin': origin || allowed, 'Access-Control-Allow-Credentials': 'true', 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS', Vary: 'Origin' }); return res.end(); }
@@ -606,8 +623,10 @@ const server = createServer(async (req, res) => {
   }
 });
 
-  server.listen(port, process.env.API_HOST || '127.0.0.1', () => {
-    console.log(`Dar Al Handasa API listening at http://${process.env.API_HOST || '127.0.0.1'}:${port}`);
+  const isDeployed = Boolean(process.env.RENDER || (process.env.PORT && !process.env.API_HOST));
+  const host = (process.env.API_HOST || (isDeployed ? '0.0.0.0' : '127.0.0.1')).trim();
+  server.listen(port, host, () => {
+    console.log(`Dar Al Handasa API listening at http://${host}:${port}`);
     console.info('[API] WhatsApp reservation worker status', {
       environment: appEnvironment,
       mode: isSingleOrderWorker ? 'single-order' : 'global',

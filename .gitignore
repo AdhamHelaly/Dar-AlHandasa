@@ -58,3 +58,5 @@ data/*.log
 .product-image-test-run/
 /supabase/.temp/
 
+.vercel
+.env*
