@@ -46,6 +46,27 @@ const stagingConfigurationValid = appEnvironment === 'staging'
   && Boolean(process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD && !/example\.(?:com|invalid)|replace-with/i.test(`${process.env.ADMIN_EMAIL} ${process.env.ADMIN_PASSWORD}`));
 if (appEnvironment === 'staging' && !stagingConfigurationValid) throw new Error('Invalid staging configuration: .env.staging must contain valid dedicated staging project credentials and admin settings; production project credentials are rejected.');
 
+const singleOrderArgs = process.argv.filter(arg => arg.startsWith('--worker-single-order=') || arg === '--worker-single-order');
+if (singleOrderArgs.length > 1) {
+  throw new Error('Multiple --worker-single-order arguments are rejected.');
+}
+let singleOrderTargetId = null;
+if (singleOrderArgs.length === 1) {
+  if (appEnvironment !== 'staging') {
+    throw new Error('--worker-single-order is only permitted in staging environment.');
+  }
+  const rawValue = singleOrderArgs[0].includes('=') ? singleOrderArgs[0].slice('--worker-single-order='.length).trim() : '';
+  if (!rawValue) {
+    throw new Error('Missing UUID for --worker-single-order.');
+  }
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!UUID_REGEX.test(rawValue)) {
+    throw new Error('Invalid UUID for --worker-single-order.');
+  }
+  singleOrderTargetId = rawValue.toLowerCase();
+}
+const isSingleOrderWorker = Boolean(singleOrderTargetId);
+
 const secret = process.env.SESSION_SECRET || randomBytes(48).toString('hex');
 const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
 const adminPassword = process.env.ADMIN_PASSWORD;
@@ -53,9 +74,29 @@ const port = Number(process.env.API_PORT || 3000);
 const nodeEnvironment = process.env.NODE_ENV?.trim().toLowerCase() || 'development';
 const reservationWorkerRequested = process.env.WHATSAPP_RESERVATION_WORKER_ENABLED?.trim().toLowerCase() === 'true';
 const workerEnvironmentAllowed = ['staging', 'production'].includes(appEnvironment) && nodeEnvironment === 'production';
-const reservationWorkerEnabled = reservationWorkerRequested && workerEnvironmentAllowed && isSupabaseConfigured() && (appEnvironment !== 'staging' || stagingConfigurationValid);
-const reservationWorkerDisabledReason = !reservationWorkerRequested ? 'switch_off' : !workerEnvironmentAllowed ? 'isolated_environment_required' : !isSupabaseConfigured() ? 'supabase_not_configured' : appEnvironment === 'staging' && !stagingConfigurationValid ? 'staging_configuration_invalid' : null;
-const reservationWorkerStatus = { enabled: reservationWorkerEnabled, scheduled: false, running: false, lastRunAt: null, lastSuccessAt: null, lastErrorCode: null, disabledReason: reservationWorkerDisabledReason };
+const reservationWorkerEnabled = isSingleOrderWorker
+  ? (appEnvironment === 'staging' && stagingConfigurationValid && isSupabaseConfigured())
+  : (reservationWorkerRequested && workerEnvironmentAllowed && isSupabaseConfigured() && (appEnvironment !== 'staging' || stagingConfigurationValid));
+
+const reservationWorkerDisabledReason = reservationWorkerEnabled ? null
+  : isSingleOrderWorker ? (!stagingConfigurationValid ? 'staging_configuration_invalid' : !isSupabaseConfigured() ? 'supabase_not_configured' : 'staging_environment_required')
+  : !reservationWorkerRequested ? 'switch_off'
+  : !workerEnvironmentAllowed ? 'isolated_environment_required'
+  : !isSupabaseConfigured() ? 'supabase_not_configured'
+  : appEnvironment === 'staging' && !stagingConfigurationValid ? 'staging_configuration_invalid'
+  : null;
+
+const reservationWorkerStatus = {
+  enabled: reservationWorkerEnabled,
+  mode: isSingleOrderWorker ? 'single-order' : 'global',
+  targetOrderId: isSingleOrderWorker ? singleOrderTargetId : undefined,
+  scheduled: false,
+  running: false,
+  lastRunAt: null,
+  lastSuccessAt: null,
+  lastErrorCode: null,
+  disabledReason: reservationWorkerDisabledReason
+};
 const attempts = new Map();
 const json = (res, status, body) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': res.getHeader('Access-Control-Allow-Origin') || process.env.FRONTEND_ORIGIN || `http://127.0.0.1:4200`, 'Vary': 'Origin' }); res.end(JSON.stringify(body)); };
 const clean = (value, max = 1000) => typeof value === 'string' ? value.trim().replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').slice(0, max) : '';
@@ -567,7 +608,15 @@ const server = createServer(async (req, res) => {
 
   server.listen(port, process.env.API_HOST || '127.0.0.1', () => {
     console.log(`Dar Al Handasa API listening at http://${process.env.API_HOST || '127.0.0.1'}:${port}`);
-    console.info('[API] WhatsApp reservation worker status', { environment: appEnvironment, enabled: reservationWorkerEnabled, scheduled: false, running: false, reason: reservationWorkerDisabledReason });
+    console.info('[API] WhatsApp reservation worker status', {
+      environment: appEnvironment,
+      mode: isSingleOrderWorker ? 'single-order' : 'global',
+      targetOrderId: singleOrderTargetId || undefined,
+      enabled: reservationWorkerEnabled,
+      scheduled: false,
+      running: false,
+      reason: reservationWorkerDisabledReason
+    });
     if (!reservationWorkerEnabled) return;
     let sweepRunning = false;
     let lastSweepError = '';
@@ -576,21 +625,87 @@ const server = createServer(async (req, res) => {
       sweepRunning = true;
       reservationWorkerStatus.running = true;
       reservationWorkerStatus.lastRunAt = new Date().toISOString();
-      console.info('[API] WhatsApp reservation sweep started');
-      try {
-        const expiredCount = await supabaseRequest('rpc/expire_whatsapp_reservations', { method: 'POST', body: { p_batch_size: 100 } });
-        lastSweepError = '';
-        reservationWorkerStatus.lastSuccessAt = new Date().toISOString();
-        reservationWorkerStatus.lastErrorCode = null;
-        console.info('[API] WhatsApp reservation sweep completed', { expiredCount: Number.isInteger(expiredCount) ? expiredCount : null });
-      } catch (error) {
-        const code = error?.code || 'unknown';
-        reservationWorkerStatus.lastErrorCode = code;
-        if (code !== lastSweepError) console.error('[API] WhatsApp reservation sweep failed', { code });
-        lastSweepError = code;
-      } finally {
-        sweepRunning = false;
-        reservationWorkerStatus.running = false;
+      if (isSingleOrderWorker) {
+        console.info('[API] WhatsApp isolated single-order sweep started', { orderId: singleOrderTargetId });
+        try {
+          const rows = await supabaseRequest(supabaseTable('orders', new URLSearchParams({
+            select: 'id,order_method,status,reservation_expires_at,order_items(product_id)',
+            id: `eq.${singleOrderTargetId}`,
+            limit: '1'
+          }).toString()));
+          const targetOrder = rows?.[0];
+          if (!targetOrder) {
+            throw new Error('target_order_not_found');
+          }
+          if (targetOrder.order_method !== 'whatsapp') {
+            throw new Error('target_order_not_whatsapp');
+          }
+          if (targetOrder.status !== 'pending' && targetOrder.status !== 'expired') {
+            throw new Error(`target_order_invalid_status:${targetOrder.status}`);
+          }
+          if (!targetOrder.reservation_expires_at && targetOrder.status === 'pending') {
+            throw new Error('target_order_missing_expiration');
+          }
+          const expectedProductId = process.env.STAGING_TEST_PRODUCT_ID;
+          if (expectedProductId) {
+            const hasFixture = targetOrder.order_items?.some(item => item.product_id === expectedProductId);
+            if (!hasFixture) {
+              throw new Error('target_order_product_mismatch');
+            }
+          }
+
+          if (targetOrder.status === 'expired') {
+            console.info('[API] Target WhatsApp reservation already expired; skipping RPC', { orderId: singleOrderTargetId });
+            lastSweepError = '';
+            reservationWorkerStatus.lastSuccessAt = new Date().toISOString();
+            reservationWorkerStatus.lastErrorCode = null;
+            return;
+          }
+
+          const expiredOrder = await supabaseRequest('rpc/expire_whatsapp_order', {
+            method: 'POST',
+            body: { p_order_id: singleOrderTargetId }
+          });
+
+          lastSweepError = '';
+          reservationWorkerStatus.lastSuccessAt = new Date().toISOString();
+          reservationWorkerStatus.lastErrorCode = null;
+          if (expiredOrder?.status === 'expired') {
+            console.info('[API] WhatsApp single-order reservation expired successfully', { orderId: singleOrderTargetId });
+          } else {
+            console.info('[API] WhatsApp single-order reservation checked; not yet expired', {
+              orderId: singleOrderTargetId,
+              expiresAt: targetOrder.reservation_expires_at
+            });
+          }
+        } catch (error) {
+          const code = error?.code || error?.message || 'unknown';
+          reservationWorkerStatus.lastErrorCode = code;
+          if (code !== lastSweepError) {
+            console.error('[API] WhatsApp single-order sweep failed (never falls back to global sweep)', { code, orderId: singleOrderTargetId });
+          }
+          lastSweepError = code;
+        } finally {
+          sweepRunning = false;
+          reservationWorkerStatus.running = false;
+        }
+      } else {
+        console.info('[API] WhatsApp reservation sweep started');
+        try {
+          const expiredCount = await supabaseRequest('rpc/expire_whatsapp_reservations', { method: 'POST', body: { p_batch_size: 100 } });
+          lastSweepError = '';
+          reservationWorkerStatus.lastSuccessAt = new Date().toISOString();
+          reservationWorkerStatus.lastErrorCode = null;
+          console.info('[API] WhatsApp reservation sweep completed', { expiredCount: Number.isInteger(expiredCount) ? expiredCount : null });
+        } catch (error) {
+          const code = error?.code || 'unknown';
+          reservationWorkerStatus.lastErrorCode = code;
+          if (code !== lastSweepError) console.error('[API] WhatsApp reservation sweep failed', { code });
+          lastSweepError = code;
+        } finally {
+          sweepRunning = false;
+          reservationWorkerStatus.running = false;
+        }
       }
     };
     const initialSweep = setTimeout(sweep, 2000);
@@ -598,4 +713,15 @@ const server = createServer(async (req, res) => {
     const sweepTimer = setInterval(sweep, 60_000);
     sweepTimer.unref?.();
     reservationWorkerStatus.scheduled = true;
+
+    const shutdown = () => {
+      clearTimeout(initialSweep);
+      clearInterval(sweepTimer);
+      server.close(() => {
+        console.info('[API] Server and WhatsApp reservation worker stopped cleanly');
+        process.exit(0);
+      });
+    };
+    process.once('SIGTERM', shutdown);
+    process.once('SIGINT', shutdown);
   });
