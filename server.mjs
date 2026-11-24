@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { createHash, createHmac, randomBytes, randomUUID, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
+import { Readable } from 'node:stream';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,7 +28,7 @@ if (appEnvironment === 'staging') {
   if (existsSync(envFile)) {
     for (const key of ['APP_ENV','SUPABASE_URL','SUPABASE_SERVICE_ROLE_KEY','SESSION_SECRET','ADMIN_EMAIL','ADMIN_PASSWORD','API_HOST','API_PORT','NODE_ENV','WHATSAPP_RESERVATION_WORKER_ENABLED','FRONTEND_ORIGIN','STAGING_SUPABASE_PROJECT_REF','STAGING_API_URL','STAGING_TEST_PRODUCT_ID']) delete process.env[key];
     Object.assign(process.env, parseEnvFile(envFile));
-  } else if (!process.env.RENDER && !process.env.IS_CLOUD_DEPLOYMENT) {
+  } else if (!process.env.RENDER && !process.env.VERCEL && !process.env.IS_CLOUD_DEPLOYMENT) {
     throw new Error('Staging environment is isolated: create .env.staging from .env.staging.example before starting.');
   }
   if (process.env.APP_ENV?.trim().toLowerCase() !== 'staging') throw new Error('.env.staging must explicitly set APP_ENV=staging.');
@@ -123,7 +124,18 @@ const publicSettingKeys = new Set(['business_name','currency','phone','whatsapp'
 function sign(payload) { const data = Buffer.from(JSON.stringify({ ...payload, exp: Date.now() + 8 * 60 * 60 * 1000 })).toString('base64url'); return `${data}.${createHmac('sha256', secret || 'development-secret-change-before-deploy').update(data).digest('base64url')}`; }
 function verify(token) { try { const [data, signature] = token.split('.'); const expected = createHmac('sha256', secret || 'development-secret-change-before-deploy').update(data).digest(); const actual = Buffer.from(signature, 'base64url'); if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null; const payload = JSON.parse(Buffer.from(data, 'base64url').toString()); return payload.exp > Date.now() ? payload : null; } catch { return null; } }
 function limited(req, key) { const ip = req.socket.remoteAddress || 'unknown'; const slot = `${ip}:${key}`; const now = Date.now(); const state = attempts.get(slot) || { start: now, count: 0 }; if (now - state.start > 15 * 60 * 1000) { state.start = now; state.count = 0; } state.count++; attempts.set(slot, state); return state.count <= 12; }
-async function readBody(req) { let body = ''; for await (const chunk of req) { body += chunk; if (body.length > 100_000) throw new Error('too_large'); } try { return JSON.parse(body || '{}'); } catch { throw new Error('invalid_json'); } }
+function parseJsonBody(raw) { try { return JSON.parse(raw || '{}'); } catch { throw new Error('invalid_json'); } }
+async function readBody(req) {
+  // Vercel's Node runtime may hand over an already parsed body. Accept every
+  // shape so the same handler works behind the standalone server and `/api`.
+  const pre = req.body;
+  if (Buffer.isBuffer(pre)) return parseJsonBody(pre.toString('utf8'));
+  if (typeof pre === 'string') return parseJsonBody(pre);
+  if (pre && typeof pre === 'object') return pre;
+  let body = '';
+  for await (const chunk of req) { body += chunk; if (body.length > 100_000) throw new Error('too_large'); }
+  return parseJsonBody(body);
+}
 function admin(req) { const header = req.headers.authorization || ''; const identity = verify(header.startsWith('Bearer ') ? header.slice(7) : ''); return identity?.role === 'admin' ? identity : null; }
 function user(req) { const header = req.headers.authorization || ''; return verify(header.startsWith('Bearer ') ? header.slice(7) : ''); }
 function productShape(p) { return { id: p.id, sku: p.sku, name: p.name, brand: p.brand, category: p.category, price: p.price, stock: !!p.stock, image: p.image || '', label: p.label || '' }; }
@@ -176,7 +188,9 @@ function readProductImage(req) {
       if (!detectedMime || file.declaredMime !== detectedMime) return reject(Object.assign(new Error('invalid_image_type'), { code: 'invalid_image_type' }));
       resolve({ buffer: b, mime: detectedMime, extension: detectedMime === 'image/jpeg' ? 'jpg' : detectedMime.slice('image/'.length) });
     });
-    req.pipe(parser);
+    const source = Buffer.isBuffer(req.body) ? Readable.from(req.body) : req;
+    source.on('error', () => reject(Object.assign(new Error('invalid_image_upload'), { code: 'invalid_image_upload' })));
+    source.pipe(parser);
   });
 }
 function productImagePathFromUrl(imageUrl, productId) {
@@ -268,7 +282,7 @@ async function cleanupPreviousProductImage(oldImage, productId, newImage) {
   }
 }
 
-const server = createServer(async (req, res) => {
+export const requestHandler = async (req, res) => {
   const origin = req.headers.origin;
   const allowed = configuredFrontendOrigin || 'http://127.0.0.1:4200';
   if (origin && origin !== allowed && origin !== 'http://127.0.0.1:4200') return json(res, 403, { error: 'origin_not_allowed' });
@@ -621,7 +635,13 @@ const server = createServer(async (req, res) => {
     console.error('[API] request failed', { method: req.method, path, status: error?.status || 500, code: error?.code || 'internal_error' });
     return json(res,500,{ error:'server_error' });
   }
-});
+};
+
+const server = createServer(requestHandler);
+
+// A long-running host (local, Render, etc.) starts listening; on Vercel the
+// same handler is exported from `api/[...path].mjs` as a serverless function.
+if (!process.env.VERCEL) {
 
   const isDeployed = Boolean(process.env.RENDER || (process.env.PORT && !process.env.API_HOST));
   const host = (process.env.API_HOST || (isDeployed ? '0.0.0.0' : '127.0.0.1')).trim();
@@ -744,3 +764,4 @@ const server = createServer(async (req, res) => {
     process.once('SIGTERM', shutdown);
     process.once('SIGINT', shutdown);
   });
+}

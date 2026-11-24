@@ -1,0 +1,11 @@
+node_modules
+.angular
+dist
+.vercel
+.env
+.env.*
+data
+.tmp
+.product-image-test-run
+.npm-cache
+supabase/.temp

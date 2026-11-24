@@ -1,177 +1,122 @@
-# نشر دار الهندسة — Vercel + Render + Supabase
+# نشر دار الهندسة على Vercel (واجهة + API)
 
-هذا المستند هو دليل تنفيذ ربط الأجزاء الموجودة بالفعل. لا ينشئ قاعدة بيانات جديدة،
-ولا يلمس قاعدة Production، ولا يعيد بناء الموقع.
+كل شيء يعمل على مشروع Vercel واحد. لا يوجد Render، ولا قاعدة بيانات جديدة، ولا تغيير
+في قاعدة Production.
 
-## المعمارية المستهدفة
+## المعمارية
 
 ```
 المتصفح
    │  https://dar-al-handasa-preview.vercel.app
    ▼
-Vercel (Angular SPA)
-   │  rewrite: /api/*  →  https://dar-al-handasa-api-staging.onrender.com/api/*
-   ▼
-Render Web Service (server.mjs)  ── Service Role Key يبقى هنا فقط
+Vercel
+   ├── /            → Angular static build (dist/dar-al-handasa/browser)
+   └── /api/*       → Serverless Function: api/[...path].mjs
+                         └── server.mjs  (نفس الراوتر المستخدم محليًا)
    ▼
 Supabase Staging (bmmrjbyxmzwrohuprrwa)
 ```
 
-الواجهة تتصل دائمًا بـ `/api` نسبيًا (same-origin)، وVercel هو الذي يوجّه الطلب إلى
-Render. بهذا:
+- الواجهة تستدعي `/api` نسبيًا، فالمتصفح يرى نفس الأصل (لا CORS مفتوح).
+- `SUPABASE_SERVICE_ROLE_KEY` موجود في Vercel Environment Variables ويُقرأ داخل
+  الـ Function فقط، ولا يصل للمتصفح.
+- `server.mjs` ما زال يعمل كسيرفر عادي محليًا (`npm run start:api`)؛ عند وجود
+  `VERCEL=1` لا يستدعي `listen` ويُصدّر `requestHandler` للـ Function.
 
-- لا نحتاج كشف عنوان الـ API داخل كود الواجهة.
-- لا نحتاج CORS مفتوحًا (الطلب يبدو same-origin للمتصفح).
-- لا يوضع Service Role Key في Vercel ولا في المتصفح.
-
-## الملفات التي تم تجهيزها
+## الملفات
 
 | الملف | الدور |
 |---|---|
-| `render.yaml` | Blueprint ينشئ خدمة Staging بإعدادات صحيحة (health check، worker معطّل، فرع Backup). |
-| `vercel.json` | يوجّه `/api/*` إلى Render قبل SPA fallback، ويمنع تخزين ردود الـ API. |
-| `server.mjs` | يدعم `PORT` و`0.0.0.0`، ويرفض تشغيل Staging ببيانات Production. |
+| `api/[...path].mjs` | Catch-all Function توجّه كل `/api/*` إلى `requestHandler`. |
+| `server.mjs` | الراوتر والمنطق كما هو، مع تصدير المعالج ومنع `listen` على Vercel. |
+| `vercel.json` | بناء Angular، إعادة كتابة `/api/:path*` إلى الـ Function، SPA fallback، `no-store`، ومدة 30 ثانية. |
+| `.vercelignore` | يمنع رفع `node_modules` و`.env*` و`dist` إلى Vercel. |
 
-## الخطوة 1 — إنشاء خدمة Render (Staging)
+### ملاحظات على `vercel.json` (مهمة لأي تعديل مستقبلي)
 
-الطريقة الأسرع: Render Dashboard → **New** → **Blueprint** → اختر المستودع
-`AdhamHelaly/Dar-AlHandasa` → الفرع `backup/final-codex-state-2026-11-21`.
+1. **`/api/:path*` → `/api/[...path]` إلزامية.** في Vercel، ملف `[...path].mjs` كـ Function عادية
+   يطابق **مقطعًا واحدًا فقط**؛ بدون هذه القاعدة ترجع المسارات المتداخلة مثل
+   `/api/admin/products` خطأ 404 من المنصة ولا تصل للكود إطلاقًا.
+2. **SPA fallback وجهته `/` وليس `/index.html`.** مع `cleanUrls: true` لا تعمل وجهة
+   `/index.html`، لذلك نستخدم `/` مع بقاء عنوان المتصفح كما هو.
+3. ترتيب القواعد مهم: قاعدة API أولًا، ثم fallback.
+4. الملفات الثابتة والـ Function تُخدَم قبل قواعد الـ rewrite، لذلك الصور و`main-*.js`
+   لا تتأثر بالـ fallback.
 
-سيقرأ Render ملف `render.yaml` وينشئ خدمة:
+## متغيرات البيئة المطلوبة في Vercel
 
-- الاسم: `dar-al-handasa-api-staging`
-- Runtime: Node
-- Build: `npm ci --omit=dev`
-- Start: `npm run start:api:staging`
-- Health Check: `/api/health`
-- Auto Deploy: **معطّل** (النشر يدوي لتجنّب نشر غير مراجَع)
-
-لو فضّلت الإنشاء اليدوي، استخدم نفس القيم أعلاه حرفيًا.
-
-### متغيرات البيئة على Render
+تُضاف على مستوى المشروع (Production + Preview). كلها Server-side ولا تظهر في الحزمة.
 
 | المتغير | القيمة |
 |---|---|
 | `APP_ENV` | `staging` |
-| `NODE_ENV` | `production` |
 | `IS_CLOUD_DEPLOYMENT` | `true` |
-| `API_HOST` | `0.0.0.0` |
 | `WHATSAPP_RESERVATION_WORKER_ENABLED` | `false` |
 | `STAGING_SUPABASE_PROJECT_REF` | `bmmrjbyxmzwrohuprrwa` |
-| `FRONTEND_ORIGIN` | `https://dar-al-handasa-preview.vercel.app` |
 | `SUPABASE_URL` | `https://bmmrjbyxmzwrohuprrwa.supabase.co` |
-| `SUPABASE_SERVICE_ROLE_KEY` | من `.env.staging` — يُلصق في لوحة Render فقط |
+| `FRONTEND_ORIGIN` | `https://dar-al-handasa-preview.vercel.app` |
+| `PRODUCT_IMAGE_MAX_BYTES` | `4000000` |
+| `SUPABASE_SERVICE_ROLE_KEY` | من `.env.staging` |
 | `SESSION_SECRET` | من `.env.staging` (32 حرفًا على الأقل) |
 | `ADMIN_EMAIL` | من `.env.staging` |
 | `ADMIN_PASSWORD` | من `.env.staging` |
 
-> لا تضع قيم الأسرار في Git أو في هذا الملف أو في أي لقطة شاشة. القيم موجودة عندك في
-> `.env.staging` على `A:\DarAlhandsa` فقط.
+`NODE_ENV=production` يضبطه Vercel تلقائيًا. لا حاجة لـ `API_PORT` أو `API_HOST`.
 
-`server.mjs` يرفض الإقلاع إذا:
+## حدود Vercel التي يجب مراعاتها
 
-- كان `APP_ENV=staging` لكن مشروع Supabase ليس `bmmrjbyxmzwrohuprrwa`.
-- كانت بيانات الأدمن أو المفاتيح ما زالت Placeholder.
-- حاولت تشغيل Worker خارج Staging/Production.
+- **حجم الطلب 4.5MB** على الخطة المجانية، لذلك `PRODUCT_IMAGE_MAX_BYTES=4000000`
+  حتى يرفض الخادم الصور الكبيرة برسالة `413` واضحة بدل فشل الطلب كله.
+- **مدة التنفيذ** 30 ثانية (مضبوطة في `vercel.json`). الاستعلامات العادية أسرع بكثير.
+- كل Function لها **Cold Start** قصير عند أول طلب بعد خمول.
+- لا يوجد Worker دائم؛ `WHATSAPP_RESERVATION_WORKER_ENABLED=false` إلزامي.
+  إن احتجنا جدولة لاحقًا فالحل Vercel Cron يستدعي مسارًا مخصصًا، وليس مؤقتًا داخليًا.
 
-## الخطوة 2 — التحقق من الـ Backend مباشرة
-
-بعد أول Deploy، افتح:
-
-```
-https://dar-al-handasa-api-staging.onrender.com/api/health
-```
-
-الرد المتوقع:
-
-```json
-{
-  "status": "ok",
-  "database": "supabase",
-  "environment": "staging",
-  "supabaseProjectRef": "bmmrjbyxmzwrohuprrwa",
-  "reservationWorker": { "enabled": false }
-}
-```
-
-ثم:
-
-```
-https://dar-al-handasa-api-staging.onrender.com/api/products
-```
-
-يجب أن يعيد `{ "products": [...] }` بمنتجات Staging (منها المنتج التجريبي
-`STAGE-20261121-672B643111`).
-
-> الخطة المجانية في Render تُوقف الخدمة عند عدم الاستخدام. أول طلب بعد الخمول قد
-> يستغرق 30–60 ثانية. هذا سلوك متوقع، وليس عطلًا.
-
-## الخطوة 3 — ربط Vercel بالـ Backend
-
-`vercel.json` يحتوي بالفعل على:
-
-```json
-{ "source": "/api/:path*",
-  "destination": "https://dar-al-handasa-api-staging.onrender.com/api/:path*" }
-```
-
-لو أعطاك Render اسمًا مختلفًا (يحدث فقط إذا كان الاسم محجوزًا عالميًا)، عدّل
-`destination` في `vercel.json` إلى العنوان الفعلي، ثم أعد النشر:
+## النشر
 
 ```powershell
 cd A:\DarAlhandsa
-vercel deploy
+npm run build -- --configuration production   # تحقق محلي
+vercel deploy                                  # معاينة
 vercel ls dar-al-handasa-preview
 ```
 
-اضبط النطاق الثابت `dar-al-handasa-preview.vercel.app` على هذا النشر (Promote)، لأن
-الـ Backend يقبل أصلًا واحدًا فقط (`FRONTEND_ORIGIN`). روابط المعاينة العشوائية
-(`...-abc123.vercel.app`) سترجع `403 origin_not_allowed`.
+بعد نجاح المعاينة، ثبّت النشر على النطاق:
 
-## الخطوة 4 — اختبار نهائي من الموقع المنشور
+```powershell
+vercel promote <deployment-url>
+```
 
-افتح `https://dar-al-handasa-preview.vercel.app` وتأكد من:
-
-- [ ] ظهور المنتجات (وليس رسالة فشل تحميل الكتالوج).
-- [ ] البحث والفلترة بالماركة والتصنيف والسعر.
-- [ ] صفحة تفاصيل المنتج والسلة.
-- [ ] Checkout مع حساب السعر من الخادم.
-- [ ] تسجيل دخول الأدمن وفتح لوحة التحكم.
-- [ ] رفع صورة منتج واستبدالها وحذفها (من خلال الـ Backend).
-- [ ] إدارة الطلبات والمخزون.
-- [ ] `/api/health` عبر نطاق Vercel يعيد نفس نتيجة Render.
-
-أوامر فحص سريعة:
+## التحقق
 
 ```powershell
 Invoke-RestMethod https://dar-al-handasa-preview.vercel.app/api/health
 (Invoke-RestMethod https://dar-al-handasa-preview.vercel.app/api/products).products.Count
 ```
 
-## الخطوة 5 — Production (بعد موافقة صريحة فقط)
+الرد المتوقع من `/api/health`:
 
-لا تنفّذ هذه الخطوة قبل نجاح Staging بالكامل وموافقة صاحب المشروع:
-
-1. أنشئ خدمة Render منفصلة (أو Blueprint منفصل) بقيم Production.
-2. `SUPABASE_URL` = `https://ipegazjnkejasorskdur.supabase.co` و
-   `APP_ENV=production` (بدون `STAGING_SUPABASE_PROJECT_REF`).
-3. `FRONTEND_ORIGIN` = النطاق النهائي.
-4. غيّر `destination` في `vercel.json` إلى عنوان Backend الإنتاجي.
-5. اختبر Health Check ثم كل الوظائف، ثم اعتمد النشر.
+```json
+{ "status": "ok", "database": "supabase", "environment": "staging",
+  "supabaseProjectRef": "bmmrjbyxmzwrohuprrwa",
+  "reservationWorker": { "enabled": false } }
+```
 
 ## استكشاف الأخطاء
 
-| العرض | السبب المرجّح | الحل |
+| العرض | السبب | الحل |
 |---|---|---|
-| `503 supabase_not_configured` | `SUPABASE_URL` أو المفتاح غير مضبوط | راجع متغيرات Render |
-| `Invalid staging configuration` | المشروع ليس Staging، أو قيمة Placeholder | صحّح `STAGING_SUPABASE_PROJECT_REF` والبيانات |
-| `403 origin_not_allowed` | الأصل ليس `FRONTEND_ORIGIN` بالحرف | افتح عبر النطاق الثابت أو حدّث القيمة |
-| `502` من Vercel على `/api/*` | Render متوقف/اسم الخدمة مختلف | افتح `/api/health` على Render وعدّل `destination` |
-| المنتجات تظهر بعد تأخير | Cold Start للخطة المجانية | ترقية الخطة أو إبقاء الخدمة دافئة |
-| فشل Health Check أثناء النشر | المتغيرات لم تُضبط قبل أول Deploy | أضفها ثم Manual Deploy |
+| `FUNCTION_INVOCATION_FAILED` | خطأ أثناء تحميل الوحدة (بيانات ناقصة) | راجع Logs في Vercel ورسالة `Invalid staging configuration` |
+| `403 origin_not_allowed` | الطلب من رابط معاينة عشوائي | استخدم النطاق الثابت أو حدّث `FRONTEND_ORIGIN` |
+| `503 supabase_not_configured` | متغيرات Supabase ناقصة | أضفها ثم أعد النشر |
+| `413 image_too_large` | الصورة أكبر من 4MB | صغّر الصورة (حد Vercel) |
+| المنتجات تظهر بعد تأخير بسيط | Cold Start | طبيعي على الخطة المجانية |
 
-## الرجوع للخلف
+## Production لاحقًا (بموافقة صريحة)
 
-- إعادة نشر نسخة Vercel سابقة من لوحة Vercel (Deployments → Promote).
-- تعطيل الخدمة على Render لا يؤثر على Supabase.
-- لا حذف لأي طلب أو منتج؛ الأرشفة فقط.
+1. غيّر `APP_ENV` إلى `production` وأزل `STAGING_SUPABASE_PROJECT_REF`.
+2. اضبط `SUPABASE_URL` و`SUPABASE_SERVICE_ROLE_KEY` على مشروع Production الحالي.
+3. اضبط `FRONTEND_ORIGIN` على النطاق النهائي.
+4. اختبر `/api/health` وكل الوظائف، ثم اعتمد النشر.
+
+لا تُجرى أي كتابة على Production أثناء اختبارات Staging.
