@@ -1,0 +1,53 @@
+# Render Blueprint — Dar Al Handasa API (Staging)
+#
+# Deploy from: Render Dashboard → New → Blueprint → select
+# https://github.com/AdhamHelaly/Dar-AlHandasa
+# Branch: backup/final-codex-state-2026-11-21
+#
+# This blueprint only provisions the STAGING API. It never points at the
+# production Supabase project. Production values are added later, after
+# staging is verified and the owner approves a production deploy.
+services:
+  - type: web
+    name: dar-al-handasa-api-staging
+    runtime: node
+    plan: free
+    region: frankfurt
+    branch: backup/final-codex-state-2026-11-21
+    autoDeploy: false
+    buildCommand: npm ci --omit=dev
+    # server.mjs reads APP_ENV/--env and loads .env.staging only when present.
+    # On Render there is no env file, so every value comes from the dashboard.
+    startCommand: npm run start:api:staging
+    healthCheckPath: /api/health
+    envVars:
+      - key: APP_ENV
+        value: staging
+      - key: NODE_ENV
+        value: production
+      # Tells server.mjs that it runs on a managed host without an .env.staging file.
+      - key: IS_CLOUD_DEPLOYMENT
+        value: "true"
+      - key: API_HOST
+        value: 0.0.0.0
+      # Never enable the WhatsApp worker for this deploy.
+      - key: WHATSAPP_RESERVATION_WORKER_ENABLED
+        value: "false"
+      # Non-secret: the exact Staging Supabase project. server.mjs rejects any
+      # value that matches the production ref (ipegazjnkejasorskdur).
+      - key: STAGING_SUPABASE_PROJECT_REF
+        value: bmmrjbyxmzwrohuprrwa
+      # Required secret / account values — entered once in the Render dashboard.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      # The public frontend origin allowed by the API CORS/Origin check.
+      - key: FRONTEND_ORIGIN
+        sync: false
