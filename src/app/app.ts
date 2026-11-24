@@ -6,7 +6,7 @@ import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } fro
 import { LucideBoxes, LucideBuilding2, LucideHeadset, LucideLandmark, LucideMenu, LucideSearch, LucideShoppingCart, LucideUserRound, LucideWalletCards } from '@lucide/angular';
 import { siFacebook, siInstagram, siWhatsapp } from 'simple-icons';
 import { filter, finalize, timeout } from 'rxjs';
-import { boundedCartQuantity, canIncreaseCartQuantity as canIncreaseCartLine, cartAvailabilityIssue, filterCatalog } from './storefront-logic';
+import { boundedCartQuantity, canIncreaseCartQuantity as canIncreaseCartLine, cartAvailabilityIssue, filterCatalog, resolveApiBaseUrl } from './storefront-logic';
 
 type Product = { id: string; name: string; description: string; brand: string; category: string; price: number; sku: string; stock: number; image: string; label?: string; active?: boolean; archivedAt?: string | null };
 type AdminProductsResponse = { products: Product[] };
@@ -15,17 +15,14 @@ type ImportRow = { row: number; sku: string; name: string; category: string; bra
 type CartLine = { product: Product; quantity: number };
 type SiteSettings = { business_name?: string; currency?: string; phone?: string; whatsapp?: string; whatsapp_link?: string; instapay_number?: string; wallet_number?: string; facebook_url?: string; instagram_url?: string; email?: string; business_hours?: string; address?: string; delivery_enabled?: string; delivery_fee?: string; delivery_note?: string; hero_title?: string; hero_subtitle?: string; hero_description?: string };
 
-const localDevelopmentOrigin = isDevMode()
-  && typeof window !== 'undefined'
-  && window.location.origin === 'http://127.0.0.1:4200';
-const localApiSwitches = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-const stagingApiRequested = localDevelopmentOrigin
-  && localApiSwitches?.get('stagingTest') === '1'
-  && localApiSwitches?.get('productImageTestGateway') !== '1';
-const imageTestGatewayRequested = localDevelopmentOrigin
-  && localApiSwitches?.get('productImageTestGateway') === '1'
-  && localApiSwitches?.get('stagingTest') !== '1';
-const API = `http://127.0.0.1:${stagingApiRequested ? '3203' : imageTestGatewayRequested ? '3104' : '3000'}/api`;
+const isBrowser = typeof window !== 'undefined';
+const API = resolveApiBaseUrl({
+  isDevMode: isDevMode(),
+  origin: isBrowser ? window.location.origin : '',
+  searchParams: isBrowser ? new URLSearchParams(window.location.search) : null,
+  windowApiUrl: isBrowser ? ((window as any).__DAR_AL_HANDASA_API_URL__ || (window as any).__API_URL__) : null,
+  trustedApiOrigins: isBrowser ? ((window as any).__DAR_AL_HANDASA_TRUSTED_API_ORIGINS__ || []) : []
+});
 const OFFICIAL_CONTACT: SiteSettings = {
   phone: '01099005307', whatsapp: '01099005307', whatsapp_link: 'https://wa.me/201099005307',
   instapay_number: '01099005307', wallet_number: '01500074015',

@@ -189,3 +189,108 @@ test('a stock change below the cart quantity is detected and can be reconciled',
   assert.equal(logic.cartAvailabilityIssue(true, 2, 3), 'exceeds_stock');
   assert.deepEqual(logic.boundedCartQuantity(2, 3, 0), { quantity: 2, capped: true, unavailable: false });
 });
+
+test('resolveApiBaseUrl preserves local development defaults', () => {
+  assert.equal(logic.resolveApiBaseUrl({ origin: 'http://127.0.0.1:4200' }), 'http://127.0.0.1:3000/api');
+  assert.equal(logic.resolveApiBaseUrl({ isDevMode: true }), 'http://127.0.0.1:3000/api');
+});
+
+test('resolveApiBaseUrl respects local stagingTest and image gateway query switches', () => {
+  const stagingParams = new URLSearchParams('stagingTest=1');
+  assert.equal(logic.resolveApiBaseUrl({ origin: 'http://127.0.0.1:4200', searchParams: stagingParams }), 'http://127.0.0.1:3203/api');
+
+  const gatewayParams = new URLSearchParams('productImageTestGateway=1');
+  assert.equal(logic.resolveApiBaseUrl({ origin: 'http://127.0.0.1:4200', searchParams: gatewayParams }), 'http://127.0.0.1:3104/api');
+});
+
+test('resolveApiBaseUrl falls back to relative /api on Vercel and remote deployments', () => {
+  assert.equal(logic.resolveApiBaseUrl({ origin: 'https://dar-al-handasa.vercel.app' }), '/api');
+  assert.equal(logic.resolveApiBaseUrl({ origin: 'https://daralhandasa.com' }), '/api');
+  assert.equal(logic.resolveApiBaseUrl({}), '/api');
+});
+
+test('resolveApiBaseUrl strictly blocks untrusted query parameters on remote origins', () => {
+  // Attacker attempts to exfiltrate admin credentials or order details by passing an external apiUrl query param
+  const maliciousQuery = new URLSearchParams('apiUrl=https://attacker-phishing.com/api');
+  assert.equal(
+    logic.resolveApiBaseUrl({ origin: 'https://preview.vercel.app', searchParams: maliciousQuery }),
+    '/api',
+    'Remote deployments must ignore query-parameter apiUrl overrides'
+  );
+  assert.equal(
+    logic.resolveApiBaseUrl({ origin: 'https://daralhandasa.com', searchParams: maliciousQuery }),
+    '/api',
+    'Production deployments must ignore query-parameter apiUrl overrides'
+  );
+});
+
+test('resolveApiBaseUrl rejects insecure or localhost window URLs on remote origins', () => {
+  // Prevent cloud preview / production from accidentally using insecure http: or loopback
+  assert.equal(
+    logic.resolveApiBaseUrl({ origin: 'https://preview.vercel.app', windowApiUrl: 'http://127.0.0.1:3000/api' }),
+    '/api',
+    'Remote origins must reject loopback 127.0.0.1'
+  );
+  assert.equal(
+    logic.resolveApiBaseUrl({ origin: 'https://daralhandasa.com', windowApiUrl: 'http://insecure-api.com/api' }),
+    '/api',
+    'Remote origins must reject non-HTTPS URLs'
+  );
+});
+
+test('resolveApiBaseUrl accepts trusted HTTPS window URLs or relative paths on remote origins', () => {
+  assert.equal(
+    logic.resolveApiBaseUrl({ origin: 'https://preview.vercel.app', windowApiUrl: '/api' }),
+    '/api'
+  );
+  // Protocol-relative URLs are rejected
+  assert.equal(
+    logic.resolveApiBaseUrl({ origin: 'https://preview.vercel.app', windowApiUrl: '//attacker.com/api' }),
+    '/api'
+  );
+  // HTTPS alone is NOT sufficient trust: if trustedApiOrigins is omitted or empty, external HTTPS URL is rejected
+  assert.equal(
+    logic.resolveApiBaseUrl({
+      origin: 'https://preview.vercel.app',
+      windowApiUrl: 'https://arbitrary-https-host.com/api'
+    }),
+    '/api',
+    'HTTPS alone must not be trusted without explicit allowlist'
+  );
+  // Rejects private IP addresses even with HTTPS
+  assert.equal(
+    logic.resolveApiBaseUrl({
+      origin: 'https://preview.vercel.app',
+      windowApiUrl: 'https://192.168.1.100/api',
+      trustedApiOrigins: ['https://192.168.1.100']
+    }),
+    '/api',
+    'Private IP addresses must be rejected in cloud environment'
+  );
+  // Explicit trusted origin match succeeds
+  assert.equal(
+    logic.resolveApiBaseUrl({
+      origin: 'https://preview.vercel.app',
+      windowApiUrl: 'https://staging-api.daralhandasa.com/api',
+      trustedApiOrigins: ['https://staging-api.daralhandasa.com']
+    }),
+    'https://staging-api.daralhandasa.com/api'
+  );
+  // Rejects origins not in the trusted allowlist
+  assert.equal(
+    logic.resolveApiBaseUrl({
+      origin: 'https://preview.vercel.app',
+      windowApiUrl: 'https://untrusted-api.com/api',
+      trustedApiOrigins: ['https://staging-api.daralhandasa.com']
+    }),
+    '/api'
+  );
+});
+
+test('resolveApiBaseUrl permits local loopback apiUrl override in dev mode only', () => {
+  const localQuery = new URLSearchParams('apiUrl=http://127.0.0.1:3999/api');
+  assert.equal(
+    logic.resolveApiBaseUrl({ origin: 'http://127.0.0.1:4200', searchParams: localQuery }),
+    'http://127.0.0.1:3999/api'
+  );
+});
