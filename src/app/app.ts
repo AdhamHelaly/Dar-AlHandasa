@@ -81,7 +81,11 @@ export class App {
   adminEmail = '';
   adminPassword = '';
   adminToken = localStorage.getItem('dar-handasa-admin-token') || '';
-  adminTab = 'products';
+  adminTab = 'overview';
+  adminStats: any = null;
+  adminStatsLoading = false;
+  adminStatsError = '';
+  adminStatsRange: '7d' | '30d' | '90d' | 'year' = '30d';
   adminProducts: Product[] = [];
   adminProductsLoading = false;
   adminProductsError = '';
@@ -396,11 +400,57 @@ export class App {
   }
   adminHeaders() { return { Authorization: `Bearer ${this.adminToken}` }; }
   loadAdminData() {
+    this.loadAdminStats();
     this.loadAdminProducts();
     const get = (path: string, cb: (data: any) => void) => this.http.get<any>(`${API}/admin/${path}`, { headers: this.adminHeaders() }).subscribe({ next: cb, error: error => this.showMessage(error?.status === 401 ? 'انتهت جلسة الإدارة. سجّل الدخول مرة أخرى.' : `تعذر تحميل بيانات الإدارة${error?.status ? ` (HTTP ${error.status})` : ''}.`) });
     get('quotes', data => this.adminQuotes = Array.isArray(data?.items) ? data.items : []); get('contacts', data => this.adminContacts = Array.isArray(data?.items) ? data.items : []); get('wholesale', data => this.adminWholesale = Array.isArray(data?.items) ? data.items : []); get('branches', data => this.adminBranches = Array.isArray(data?.branches) ? data.branches : []); get('settings', data => this.adminSettings = Array.isArray(data?.settings) ? data.settings : []); get('categories', data => this.adminCategories = Array.isArray(data?.categories) ? data.categories : []); get('brands', data => this.adminBrands = Array.isArray(data?.brands) ? data.brands : []);
     this.loadAdminOrders();
     get('customers', data => this.adminCustomers = Array.isArray(data?.customers) ? data.customers : []);
+  }
+  loadAdminStats(range: '7d' | '30d' | '90d' | 'year' = this.adminStatsRange) {
+    this.adminStatsRange = range;
+    this.adminStatsLoading = true;
+    this.adminStatsError = '';
+    this.http.get<any>(`${API}/admin/stats?range=${range}`, { headers: this.adminHeaders() }).pipe(
+      timeout({ first: 15000 }),
+      finalize(() => { this.adminStatsLoading = false; this.cdr.markForCheck(); })
+    ).subscribe({
+      next: data => {
+        this.adminStats = data;
+        this.cdr.markForCheck();
+      },
+      error: error => {
+        this.adminStatsError = error?.status === 401 ? 'انتهت جلسة الإدارة. سجّل الدخول مرة أخرى.' : 'تعذر تحميل إحصائيات المتجر.';
+        this.cdr.markForCheck();
+      }
+    });
+  }
+  get statsMaxChartRevenue(): number {
+    const list = this.adminStats?.salesChart?.timeline || [];
+    let max = 0;
+    for (const item of list) if (item.revenue > max) max = item.revenue;
+    return max > 0 ? max : 1;
+  }
+  chartBarHeight(revenue: number): number {
+    if (!revenue || revenue <= 0) return 4;
+    return Math.max(6, Math.min(100, Math.round((revenue / this.statsMaxChartRevenue) * 100)));
+  }
+  jumpToEditProduct(id: string) {
+    const product = this.adminProducts.find(p => p.id === id);
+    if (product) {
+      this.editAdminProduct(product);
+      this.adminTab = 'products';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } else {
+      this.adminTab = 'products';
+    }
+  }
+  jumpToOrders(status?: string, query?: string) {
+    this.adminTab = 'orders';
+    if (status) this.orderStatusFilter = status;
+    if (query) this.orderSearch = query;
+    this.adminOrderPage = 1;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
   loadAdminOrders() {
     this.adminOrdersLoading = true;

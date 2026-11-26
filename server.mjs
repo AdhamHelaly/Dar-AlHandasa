@@ -420,6 +420,201 @@ export const requestHandler = async (req, res) => {
     }
     if (path.startsWith('/api/admin/')) {
       if (!admin(req)) return json(res, 401, { error: 'admin_auth_required' });
+      if (req.method === 'GET' && path === '/api/admin/stats') {
+        const rangeParam = clean(url.searchParams.get('range'), 10).toLowerCase() || '30d';
+        const validRanges = new Set(['7d', '30d', '90d', 'year']);
+        const selectedRange = validRanges.has(rangeParam) ? rangeParam : '30d';
+
+        const cairo = getCairoTimeParts();
+        let rangeStart = new Date(cairo.todayStart);
+        if (selectedRange === '7d') rangeStart.setDate(rangeStart.getDate() - 6);
+        else if (selectedRange === '30d') rangeStart.setDate(rangeStart.getDate() - 29);
+        else if (selectedRange === '90d') rangeStart.setDate(rangeStart.getDate() - 89);
+        else if (selectedRange === 'year') rangeStart = new Date(cairo.yearStart);
+
+        const effectiveOrdersStart = rangeStart < cairo.monthStart ? rangeStart : cairo.monthStart;
+
+        const [
+          allTimeOrdersRes,
+          rangeOrdersRes,
+          recentOrdersRes,
+          orderItemsRes,
+          activeProductsRes,
+          lowStockAlertsRes,
+          usersRes,
+          pendingWholesaleRes
+        ] = await Promise.all([
+          fetchAllRows('orders', 'select=status,total'),
+          fetchAllRows('orders', `select=status,total,created_at&created_at=gte.${effectiveOrdersStart.toISOString()}&order=created_at.asc`),
+          supabaseRequest(supabaseTable('orders', 'select=id,customer_name,customer_phone,order_method,status,total,created_at&order=created_at.desc&limit=5')),
+          fetchAllRows('order_items', 'select=product_id,sku_snapshot,name_snapshot,quantity,unit_price,orders!inner(status)&orders.status=in.(confirmed,processing,shipped,delivered)&order=created_at.desc'),
+          fetchAllRows('products', 'select=id,stock_quantity&archived_at=is.null&active=eq.true'),
+          supabaseRequest(supabaseTable('products', 'select=id,sku,name,stock_quantity,price,active&archived_at=is.null&active=eq.true&stock_quantity=lte.5&order=stock_quantity.asc&limit=10')),
+          fetchAllRows('users', 'select=id,role,approved'),
+          supabaseRequest(supabaseTable('wholesale_applications', 'select=id,status&status=eq.pending'))
+        ]);
+
+        const allTimeOrders = Array.isArray(allTimeOrdersRes) ? allTimeOrdersRes : [];
+        const rangeOrders = Array.isArray(rangeOrdersRes) ? rangeOrdersRes : [];
+        const recentOrders = Array.isArray(recentOrdersRes) ? recentOrdersRes : [];
+        const orderItems = Array.isArray(orderItemsRes) ? orderItemsRes : [];
+        const activeProducts = Array.isArray(activeProductsRes) ? activeProductsRes : [];
+        const lowStockAlerts = Array.isArray(lowStockAlertsRes) ? lowStockAlertsRes : [];
+        const users = Array.isArray(usersRes) ? usersRes : [];
+        const pendingWholesale = Array.isArray(pendingWholesaleRes) ? pendingWholesaleRes : [];
+
+        const validStatuses = new Set(['confirmed', 'processing', 'shipped', 'delivered']);
+
+        let totalRevenue = 0;
+        let pendingRevenue = 0;
+        let completedOrdersCount = 0;
+        const ordersByStatus = {
+          pending: 0,
+          confirmed: 0,
+          processing: 0,
+          shipped: 0,
+          delivered: 0,
+          cancelled: 0,
+          expired: 0
+        };
+
+        for (const order of allTimeOrders) {
+          const status = String(order.status || '').toLowerCase();
+          const total = Number(order.total) || 0;
+          if (ordersByStatus[status] !== undefined) {
+            ordersByStatus[status]++;
+          }
+          if (validStatuses.has(status)) {
+            totalRevenue += total;
+            completedOrdersCount++;
+          } else if (status === 'pending') {
+            pendingRevenue += total;
+          }
+        }
+        totalRevenue = Number(totalRevenue.toFixed(2));
+        pendingRevenue = Number(pendingRevenue.toFixed(2));
+
+        let todayRevenue = 0;
+        let monthRevenue = 0;
+        for (const order of rangeOrders) {
+          const status = String(order.status || '').toLowerCase();
+          if (!validStatuses.has(status)) continue;
+          const total = Number(order.total) || 0;
+          const orderCreated = new Date(order.created_at);
+          if (orderCreated >= cairo.todayStart) todayRevenue += total;
+          if (orderCreated >= cairo.monthStart) monthRevenue += total;
+        }
+        todayRevenue = Number(todayRevenue.toFixed(2));
+        monthRevenue = Number(monthRevenue.toFixed(2));
+
+        const averageOrderValue = completedOrdersCount > 0
+          ? Number((totalRevenue / completedOrdersCount).toFixed(2))
+          : 0;
+
+        const timelineMap = new Map();
+        const cursorDate = new Date(rangeStart);
+        const endDate = new Date(cairo.todayStart);
+        while (cursorDate <= endDate) {
+          const dateKey = cairo.formatDate(cursorDate);
+          timelineMap.set(dateKey, { date: dateKey, revenue: 0, ordersCount: 0 });
+          cursorDate.setDate(cursorDate.getDate() + 1);
+        }
+
+        for (const order of rangeOrders) {
+          const status = String(order.status || '').toLowerCase();
+          if (!validStatuses.has(status)) continue;
+          const orderCreated = new Date(order.created_at);
+          if (orderCreated < rangeStart) continue;
+          const dateKey = cairo.formatDate(orderCreated);
+          const bucket = timelineMap.get(dateKey);
+          if (bucket) {
+            bucket.revenue = Number((bucket.revenue + (Number(order.total) || 0)).toFixed(2));
+            bucket.ordersCount++;
+          }
+        }
+
+        const topMap = new Map();
+        for (const item of orderItems) {
+          const key = item.product_id || item.sku_snapshot;
+          if (!key) continue;
+          const existing = topMap.get(key) || {
+            productId: item.product_id || null,
+            sku: item.sku_snapshot || '',
+            name: item.name_snapshot || '',
+            unitsSold: 0,
+            revenue: 0,
+            historical: !item.product_id
+          };
+          const qty = Number(item.quantity) || 0;
+          const price = Number(item.unit_price) || 0;
+          existing.unitsSold += qty;
+          existing.revenue = Number((existing.revenue + qty * price).toFixed(2));
+          topMap.set(key, existing);
+        }
+        const topProducts = Array.from(topMap.values())
+          .sort((a, b) => b.unitsSold - a.unitsSold)
+          .slice(0, 5);
+
+        const totalActiveProducts = activeProducts.length;
+        const outOfStockProducts = activeProducts.filter(p => (Number(p.stock_quantity) || 0) <= 0).length;
+        const lowStockProducts = activeProducts.filter(p => {
+          const s = Number(p.stock_quantity) || 0;
+          return s > 0 && s <= 5;
+        }).length;
+
+        const registeredCustomers = users.filter(u => u.role === 'customer' || !u.role).length;
+        const approvedTraders = users.filter(u => u.role === 'wholesale' && u.approved === true).length;
+        const pendingTraderApplications = pendingWholesale.length;
+
+        const isDataTruncated = Boolean(allTimeOrders.truncated || rangeOrders.truncated || orderItems.truncated);
+
+        return json(res, 200, {
+          kpis: {
+            totalRevenue,
+            todayRevenue,
+            monthRevenue,
+            pendingRevenue,
+            averageOrderValue,
+            totalOrders: allTimeOrders.length,
+            completedOrders: completedOrdersCount,
+            pendingOrders: ordersByStatus.pending,
+            cancelledOrders: ordersByStatus.cancelled,
+            expiredOrders: ordersByStatus.expired,
+            totalProducts: totalActiveProducts,
+            outOfStockProducts,
+            lowStockProducts,
+            registeredCustomers,
+            approvedTraders,
+            pendingTraderApplications,
+            truncated: isDataTruncated
+          },
+          ordersByStatus,
+          salesChart: {
+            range: selectedRange,
+            startDate: cairo.formatDate(rangeStart),
+            endDate: cairo.cairoDateStr,
+            timeline: Array.from(timelineMap.values())
+          },
+          topProducts,
+          lowStockAlerts: lowStockAlerts.map(p => ({
+            id: p.id,
+            sku: p.sku,
+            name: p.name,
+            stock: Number(p.stock_quantity) || 0,
+            price: Number(p.price) || 0,
+            active: p.active
+          })),
+          recentOrders: recentOrders.map(o => ({
+            id: o.id,
+            customerName: o.customer_name || 'عميل',
+            customerPhone: o.customer_phone || '',
+            orderMethod: o.order_method || 'website',
+            status: o.status,
+            total: Number(o.total) || 0,
+            createdAt: o.created_at
+          }))
+        });
+      }
       if (req.method === 'GET' && path === '/api/admin/products') {
         const query = new URLSearchParams({ select: '*,categories(name),brands(name)', order: 'created_at.desc' }).toString();
         try {
@@ -636,6 +831,61 @@ export const requestHandler = async (req, res) => {
     return json(res,500,{ error:'server_error' });
   }
 };
+
+async function fetchAllRows(table, query = '', pageSize = 1000, maxPages = 50) {
+  let allRows = [];
+  let offset = 0;
+  let truncated = false;
+  for (let page = 0; page < maxPages; page++) {
+    const pageQuery = `${query}${query ? '&' : ''}limit=${pageSize}&offset=${offset}`;
+    const rows = await supabaseRequest(supabaseTable(table, pageQuery));
+    if (!Array.isArray(rows) || !rows.length) break;
+    allRows.push(...rows);
+    if (rows.length < pageSize) break;
+    if (page === maxPages - 1) {
+      truncated = true;
+      console.warn(`[admin stats] fetchAllRows cap reached for ${table}: fetched ${allRows.length} rows; additional records exist.`);
+      break;
+    }
+    offset += pageSize;
+  }
+  allRows.truncated = truncated;
+  return allRows;
+}
+
+function getCairoTimeParts(date = new Date()) {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Cairo',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+  });
+  const parts = Object.fromEntries(fmt.formatToParts(date).map(p => [p.type, p.value]));
+  const offsetFmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Africa/Cairo',
+    timeZoneName: 'shortOffset'
+  });
+  const tzPart = offsetFmt.formatToParts(date).find(p => p.type === 'timeZoneName');
+  let offset = '+02:00';
+  if (tzPart && tzPart.value) {
+    const m = tzPart.value.match(/GMT([+-]\d+)(?::(\d+))?/);
+    if (m) {
+      const h = parseInt(m[1], 10);
+      const min = m[2] ? m[2] : '00';
+      offset = (h >= 0 ? '+' : '-') + String(Math.abs(h)).padStart(2, '0') + ':' + min;
+    }
+  }
+  const year = parts.year, month = parts.month, day = parts.day;
+  const todayIso = `${year}-${month}-${day}T00:00:00${offset}`;
+  const monthIso = `${year}-${month}-01T00:00:00${offset}`;
+  const yearIso = `${year}-01-01T00:00:00${offset}`;
+  return {
+    todayStart: new Date(todayIso),
+    monthStart: new Date(monthIso),
+    yearStart: new Date(yearIso),
+    cairoDateStr: `${year}-${month}-${day}`,
+    formatDate: (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d)
+  };
+}
 
 const server = createServer(requestHandler);
 

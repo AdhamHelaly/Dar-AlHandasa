@@ -162,7 +162,221 @@
       <section class="wrap inner-page admin-page"><div class="breadcrumbs"><a routerLink="/">الرئيسية</a><span>/</span><b>الإدارة</b></div>
         @if(!adminToken){<div class="admin-login"><span class="eyebrow blue">إدارة المتجر</span><h1>تسجيل دخول المدير</h1><p>يتم إعداد الدخول الآمن من متغيرات البيئة.</p><form class="form-card" #adminLoginNgForm="ngForm" (ngSubmit)="adminLogin(adminLoginNgForm.valid)"><label class="block-label">البريد الإلكتروني<input required type="email" name="adminEmail" [(ngModel)]="adminEmail" autocomplete="username"></label><label class="block-label">كلمة المرور<input required type="password" name="adminPassword" [(ngModel)]="adminPassword" autocomplete="current-password"></label><button class="btn btn-primary full">دخول</button></form></div>}
         @else {<div class="admin-header"><div><span class="eyebrow blue">إدارة المتجر</span><h1>لوحة التحكم</h1></div><button class="btn btn-outline" (click)="adminLogout()">تسجيل الخروج</button></div>
-          <nav class="admin-tabs"><button [class.active]="adminTab==='products'" (click)="adminTab='products'">المنتجات</button><button [class.active]="adminTab==='taxonomy'" (click)="adminTab='taxonomy'">التصنيفات والعلامات</button><button [class.active]="adminTab==='orders'" (click)="adminTab='orders'">الطلبات · {{adminOrders.length}}</button><button [class.active]="adminTab==='customers'" (click)="adminTab='customers'">العملاء · {{adminCustomers.length}}</button><button [class.active]="adminTab==='quotes'" (click)="adminTab='quotes'">طلبات الأسعار · {{adminQuotes.length}}</button><button [class.active]="adminTab==='contacts'" (click)="adminTab='contacts'">الرسائل · {{adminContacts.length}}</button><button [class.active]="adminTab==='wholesale'" (click)="adminTab='wholesale'">التجار · {{adminWholesale.length}}</button><button [class.active]="adminTab==='branches'" (click)="adminTab='branches'">الفروع</button><button [class.active]="adminTab==='settings'" (click)="adminTab='settings'">إعدادات الموقع</button></nav>
+          <nav class="admin-tabs"><button [class.active]="adminTab==='overview'" (click)="adminTab='overview'; loadAdminStats()">نظرة عامة</button><button [class.active]="adminTab==='products'" (click)="adminTab='products'">المنتجات</button><button [class.active]="adminTab==='taxonomy'" (click)="adminTab='taxonomy'">التصنيفات والعلامات</button><button [class.active]="adminTab==='orders'" (click)="adminTab='orders'">الطلبات · {{adminOrders.length}}</button><button [class.active]="adminTab==='customers'" (click)="adminTab='customers'">العملاء · {{adminCustomers.length}}</button><button [class.active]="adminTab==='quotes'" (click)="adminTab='quotes'">طلبات الأسعار · {{adminQuotes.length}}</button><button [class.active]="adminTab==='contacts'" (click)="adminTab='contacts'">الرسائل · {{adminContacts.length}}</button><button [class.active]="adminTab==='wholesale'" (click)="adminTab='wholesale'">التجار · {{adminWholesale.length}}</button><button [class.active]="adminTab==='branches'" (click)="adminTab='branches'">الفروع</button><button [class.active]="adminTab==='settings'" (click)="adminTab='settings'">إعدادات الموقع</button></nav>
+          @if(adminTab==='overview'){
+            <div class="admin-content admin-overview">
+              <div class="overview-header">
+                <div>
+                  <h2>نظرة عامة ومؤشرات الأداء</h2>
+                  <p class="muted">مؤشرات المبيعات ونشاط المتجر بتوقيت القاهرة الرسمي (Africa/Cairo).</p>
+                </div>
+                <button type="button" class="quiet" [disabled]="adminStatsLoading" (click)="loadAdminStats()">
+                  {{adminStatsLoading ? 'جارٍ التحديث…' : 'تحديث المؤشرات'}}
+                </button>
+              </div>
+
+              @if(adminStatsLoading && !adminStats){
+                <p class="muted" role="status">جارٍ تحميل مؤشرات لوحة التحكم…</p>
+              } @else if(adminStatsError && !adminStats){
+                <div class="admin-load-error" role="alert">
+                  {{adminStatsError}}
+                  <button type="button" class="quiet" (click)="loadAdminStats()">إعادة المحاولة</button>
+                </div>
+              } @else if(adminStats){
+                @if(adminStats.kpis.truncated){
+                  <div class="form-error" role="status">
+                    تنبيه: حجم السجلات تجاوز سقف الاستعلام السريع (50,000 سجل)؛ تم احتساب الإحصائيات بناءً على أحدث 50,000 سجل بدقة دون فقد البيانات الأساسية.
+                  </div>
+                }
+                <section class="overview-kpis-grid">
+                  <article class="kpi-card highlight-blue">
+                    <span class="kpi-label">إجمالي الإيرادات المحققة</span>
+                    <strong class="kpi-value">{{money(adminStats.kpis.totalRevenue)}}</strong>
+                    <div class="kpi-meta">
+                      <span>اليوم: <b>{{money(adminStats.kpis.todayRevenue)}}</b></span>
+                      <span>هذا الشهر: <b>{{money(adminStats.kpis.monthRevenue)}}</b></span>
+                    </div>
+                    <small class="kpi-note">متوسط قيمة الطلب: {{money(adminStats.kpis.averageOrderValue)}}</small>
+                  </article>
+
+                  <article class="kpi-card highlight-green">
+                    <span class="kpi-label">الطلبات المكتملة والسارية</span>
+                    <strong class="kpi-value">{{adminStats.kpis.completedOrders}} <small>طلب</small></strong>
+                    <div class="kpi-meta">
+                      <span>إجمالي الطلبات: <b>{{adminStats.kpis.totalOrders}}</b></span>
+                    </div>
+                    @if(adminStats.kpis.pendingOrders > 0){
+                      <a class="kpi-link warning" (click)="jumpToOrders('pending')">
+                        {{adminStats.kpis.pendingOrders}} طلبات بانتظار التأكيد ({{money(adminStats.kpis.pendingRevenue)}}) ↗
+                      </a>
+                    } @else {
+                      <small class="kpi-note">لا توجد طلبات معلقة حالياً</small>
+                    }
+                  </article>
+
+                  <article class="kpi-card highlight-amber">
+                    <span class="kpi-label">حالة المخزون والمنتجات</span>
+                    <strong class="kpi-value">{{adminStats.kpis.totalProducts}} <small>منتج نشط</small></strong>
+                    <div class="kpi-badges">
+                      @if(adminStats.kpis.outOfStockProducts > 0){
+                        <span class="badge danger">{{adminStats.kpis.outOfStockProducts}} نفد المخزون</span>
+                      }
+                      @if(adminStats.kpis.lowStockProducts > 0){
+                        <span class="badge warning">{{adminStats.kpis.lowStockProducts}} نواقص (&le; 5 قطع)</span>
+                      }
+                      @if(adminStats.kpis.outOfStockProducts === 0 && adminStats.kpis.lowStockProducts === 0){
+                        <span class="badge success">المخزون متوفر بالكامل</span>
+                      }
+                    </div>
+                    <a class="kpi-link" (click)="adminTab='products'">إدارة المنتجات ↗</a>
+                  </article>
+
+                  <article class="kpi-card highlight-purple">
+                    <span class="kpi-label">قاعدة العملاء والتجار</span>
+                    <strong class="kpi-value">{{adminStats.kpis.registeredCustomers}} <small>عميل مسجل</small></strong>
+                    <div class="kpi-meta">
+                      <span>التجار المعتمدون: <b>{{adminStats.kpis.approvedTraders}}</b></span>
+                    </div>
+                    @if(adminStats.kpis.pendingTraderApplications > 0){
+                      <a class="kpi-link warning" (click)="adminTab='wholesale'">
+                        {{adminStats.kpis.pendingTraderApplications}} طلبات تسجيل تجار قيد المراجعة ↗
+                      </a>
+                    } @else {
+                      <small class="kpi-note">لا توجد طلبات تجار معلقة</small>
+                    }
+                  </article>
+                </section>
+
+                <section class="overview-chart-card">
+                  <div class="chart-header">
+                    <div>
+                      <h3>حركة المبيعات</h3>
+                      <p class="muted">الرسم البياني لتطور المبيعات اليومية المحققة (لا يشمل الملغي أو منتهي الحجز).</p>
+                    </div>
+                    <div class="chart-range-picker">
+                      <button type="button" [class.active]="adminStatsRange==='7d'" (click)="loadAdminStats('7d')">آخر 7 أيام</button>
+                      <button type="button" [class.active]="adminStatsRange==='30d'" (click)="loadAdminStats('30d')">آخر 30 يوماً</button>
+                      <button type="button" [class.active]="adminStatsRange==='90d'" (click)="loadAdminStats('90d')">آخر 90 يوماً</button>
+                      <button type="button" [class.active]="adminStatsRange==='year'" (click)="loadAdminStats('year')">هذا العام</button>
+                    </div>
+                  </div>
+
+                  @if(adminStats.salesChart?.timeline?.length){
+                    <div class="chart-container">
+                      <div class="chart-bars-wrap">
+                        @for(point of adminStats.salesChart.timeline; track point.date){
+                          <div class="chart-bar-col" [title]="point.date + ': ' + money(point.revenue) + ' (' + point.ordersCount + ' طلب)'">
+                            <span class="bar-tooltip">{{money(point.revenue)}}</span>
+                            <div class="chart-bar" [style.height.%]="chartBarHeight(point.revenue)"></div>
+                            <span class="bar-label">{{point.date.slice(5)}}</span>
+                          </div>
+                        }
+                      </div>
+                    </div>
+                  } @else {
+                    <p class="muted center-text">لا توجد مبيعات مسجلة في هذا النطاق الزمني.</p>
+                  }
+                </section>
+
+                <div class="overview-grid-2">
+                  <section class="overview-card">
+                    <div class="card-head">
+                      <h3>المنتجات الأكثر مبيعاً</h3>
+                      <span class="badge blue">أعلى المبيعات</span>
+                    </div>
+                    @if(adminStats.topProducts?.length){
+                      <div class="top-products-list">
+                        @for(item of adminStats.topProducts; track (item.productId || item.sku); let i = $index){
+                          <div class="top-product-row">
+                            <span class="rank-badge">{{i + 1}}</span>
+                            <div class="prod-details">
+                              <b>{{item.name}}</b>
+                              <small>{{item.sku}} @if(item.historical){<span class="muted">(سجل تاريخي)</span>}</small>
+                            </div>
+                            <div class="prod-stats">
+                              <span>{{item.unitsSold}} قطعة</span>
+                              <b>{{money(item.revenue)}}</b>
+                            </div>
+                          </div>
+                        }
+                      </div>
+                    } @else {
+                      <p class="muted">لا توجد بيانات مبيعات مكتملة بعد.</p>
+                    }
+                  </section>
+
+                  <section class="overview-card">
+                    <div class="card-head">
+                      <h3>تنبيهات نواقص المخزون</h3>
+                      <span class="badge warning">&le; 5 قطع</span>
+                    </div>
+                    @if(adminStats.lowStockAlerts?.length){
+                      <div class="low-stock-list">
+                        @for(item of adminStats.lowStockAlerts; track item.id){
+                          <div class="low-stock-row">
+                            <div class="stock-info">
+                              <b>{{item.name}}</b>
+                              <small>{{item.sku}} · {{money(item.price)}}</small>
+                            </div>
+                            <div class="stock-actions">
+                              <span class="stock-badge" [class.zero]="item.stock <= 0">{{item.stock <= 0 ? 'نفد' : item.stock + ' متبقي'}}</span>
+                              <button type="button" class="quiet" (click)="jumpToEditProduct(item.id)">تعديل</button>
+                            </div>
+                          </div>
+                        }
+                      </div>
+                    } @else {
+                      <p class="muted success-text">جميع المنتجات النشطة متوفرة بمخزون كافٍ.</p>
+                    }
+                  </section>
+                </div>
+
+                <section class="overview-card">
+                  <div class="card-head">
+                    <div>
+                      <h3>أحدث الطلبات</h3>
+                      <p class="muted">آخر 5 طلبات مسجلة في المتجر.</p>
+                    </div>
+                    <button type="button" class="quiet" (click)="jumpToOrders()">عرض كل الطلبات &larr;</button>
+                  </div>
+                  @if(adminStats.recentOrders?.length){
+                    <div class="recent-orders-table">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>رقم الطلب</th>
+                            <th>العميل</th>
+                            <th>الهاتف</th>
+                            <th>النوع</th>
+                            <th>الحالة</th>
+                            <th>الإجمالي</th>
+                            <th>التاريخ</th>
+                            <th>إجراء</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          @for(order of adminStats.recentOrders; track order.id){
+                            <tr>
+                              <td><code class="order-id-code">{{order.id.slice(0, 8)}}</code></td>
+                              <td><b>{{order.customerName}}</b></td>
+                              <td dir="ltr">{{order.customerPhone}}</td>
+                              <td><span class="order-method-tag" [class.whatsapp]="order.orderMethod==='whatsapp'">{{order.orderMethod==='whatsapp' ? 'واتساب' : 'المتجر'}}</span></td>
+                              <td><span class="status-badge" [class]="'status-' + order.status">{{order.status}}</span></td>
+                              <td><b>{{money(order.total)}}</b></td>
+                              <td><small>{{order.createdAt.slice(0, 10)}}</small></td>
+                              <td><button type="button" class="quiet" (click)="jumpToOrders('', order.id)">عرض</button></td>
+                            </tr>
+                          }
+                        </tbody>
+                      </table>
+                    </div>
+                  } @else {
+                    <p class="muted">لا توجد طلبات مسجلة.</p>
+                  }
+                </section>
+              }
+            </div>
+          }
           @if(adminTab==='products'){<div class="admin-content"><h2>{{adminEditId?"تعديل المنتج":"إضافة منتج"}}</h2><form class="admin-product-form" #adminProductNgForm="ngForm" (ngSubmit)="saveAdminProduct(adminProductNgForm.valid)"><label>الكود *<input required name="sku" [(ngModel)]="adminProduct.sku"></label><label>اسم المنتج *<input required name="pname" [(ngModel)]="adminProduct.name"></label><label>التصنيف *<input required name="pcategory" list="category-options" [(ngModel)]="adminProduct.category"><datalist id="category-options">@for(category of categories;track category.id){<option [value]="category.name">{{category.name}}</option>}</datalist></label><label>العلامة التجارية<input name="pbrand" list="brand-options" [(ngModel)]="adminProduct.brand"><datalist id="brand-options">@for(brand of adminBrands;track brand.id){<option [value]="brand.name">{{brand.name}}</option>}</datalist></label><label>الوصف<input name="pdescription" [(ngModel)]="adminProduct.description"></label><label>سعر البيع الموحد (ج.م) *<input required type="number" min="0" step="0.01" name="pprice" [(ngModel)]="adminProduct.price"></label><label>رابط صورة خارجي (اختياري)<input name="pimage" [(ngModel)]="adminProduct.image" placeholder="اتركه فارغاً لرفع صورة من الجهاز"></label><section class="product-image-manager"><div class="product-image-preview-grid">@if(adminEditId && adminProduct.image){<figure><img [src]="adminProduct.image" alt="الصورة المحفوظة" (error)="onProductImageError($event)"><figcaption>الصورة المحفوظة</figcaption><button type="button" class="quiet danger" [disabled]="adminImageRemoveBusy" (click)="removeAdminProductImage()">{{adminImageRemoveBusy?'جارٍ الإزالة…':'إزالة الصورة المحفوظة'}}</button></figure>}@if(adminImagePreviewUrl){<figure><img [src]="adminImagePreviewUrl" alt="معاينة الصورة الجديدة"><figcaption>معاينة الصورة الجديدة</figcaption><button type="button" class="quiet" (click)="discardAdminImageSelection()">إلغاء الصورة الجديدة</button></figure>}</div><label>رفع صورة JPG أو PNG أو WebP<input id="admin-product-image-file" type="file" accept="image/jpeg,image/png,image/webp" (change)="selectAdminProductImage($any($event.target).files?.[0] || null)"></label>@if(adminImageUploadProgress>0 && adminImageUploadProgress<100){<div class="product-image-progress" role="status"><progress max="100" [value]="adminImageUploadProgress"></progress><span>{{adminImageUploadProgress}}%</span></div>}@if(adminImageError){<p class="product-image-error" role="alert">{{adminImageError}}</p>}</section><label>كمية المخزون<input required type="number" min="0" step="1" name="pstock" [(ngModel)]="adminProduct.stock"></label><label class="product-publish-toggle"><input type="checkbox" name="productActive" [(ngModel)]="adminProduct.active"> إظهار المنتج في المتجر</label>@if(adminEditId){<label>سبب تعديل المخزون<input name="inventoryReason" [(ngModel)]="adminProduct.inventoryReason" placeholder="جرد، استلام، تصحيح…"></label>}<button class="btn btn-primary" [disabled]="adminProductBusy">{{adminProductBusy?'جارٍ الحفظ…':adminEditId?"تحديث المنتج":"حفظ المنتج"}}</button>@if(adminEditId){<button type="button" class="btn btn-outline" (click)="cancelEditProduct()">إلغاء</button>}</form><section class="admin-import"><div class="admin-import-head"><div><h3>استيراد منتجات من Excel</h3><p>يضيف منتجات جديدة فقط؛ لا يغيّر أي SKU موجود.</p></div><button type="button" class="quiet" (click)="downloadImportTemplate()">تنزيل نموذج Excel</button></div><input type="file" accept=".xlsx,.xls,.csv" aria-label="اختر ملف Excel" (change)="previewProductWorkbook($any($event.target).files?.[0] || null)">@if(importPreview.length){<p>الملف: {{importFileName}} · {{importPreview.length}} صفاً · صالح: {{importPreview.filter(row=>!row.errors.length).length}}</p><div class="import-preview"><table><thead><tr><th>صف</th><th>SKU</th><th>المنتج</th><th>السعر</th><th>المخزون</th><th>النتيجة</th></tr></thead><tbody>@for(row of importPreview;track row.row){<tr><td>{{row.row}}</td><td>{{row.sku}}</td><td>{{row.name}}</td><td>{{row.price}}</td><td>{{row.stock}}</td><td>{{row.errors.length?row.errors.join('، '):'جاهز'}}</td></tr>}</tbody></table></div><button type="button" class="btn btn-primary" [disabled]="importBusy || !importPreview.some(row=>!row.errors.length)" (click)="importValidProducts()">{{importBusy?'جارٍ الاستيراد…':'استيراد الصفوف الصالحة'}}</button>}@if(importResults.length){<ul>@for(result of importResults;track result.row){<li>الصف {{result.row}} · {{result.sku}}: {{result.status==='saved'?'تم الحفظ':result.error==='sku_exists'?'SKU موجود':result.error==='duplicate_in_file'?'SKU مكرر بالملف':'فشل الحفظ'}}</li>}</ul>}</section><div class="admin-catalog-controls"><h2>الكتالوج · {{adminProducts.length}}</h2><label>الحالة<select name="adminProductFilter" [(ngModel)]="adminProductFilter"><option value="all">كل المنتجات</option><option value="published">منشورة</option><option value="unpublished">مسودات غير منشورة</option><option value="archived">مؤرشفة</option></select></label><button type="button" class="quiet" [disabled]="adminProductsLoading" (click)="loadAdminProducts()">تحديث الكتالوج</button></div>@if(adminProductsLoading){<p class="muted" role="status">جارٍ تحميل المنتجات من قاعدة البيانات…</p>} @else if(adminProductsError){<div class="admin-load-error" role="alert">{{adminProductsError}} <button type="button" class="quiet" (click)="loadAdminProducts()">إعادة المحاولة</button></div>} @else if(!adminProducts.length){<p class="muted">لا توجد منتجات في قاعدة البيانات.</p>} @else {<div class="admin-list">@for(p of filteredAdminProducts;track p.id){<article><img class="admin-product-thumb" [src]="p.image || 'assets/hero-tools.png'" [alt]="p.name" loading="lazy" decoding="async" (error)="onProductImageError($event)"><div><b>{{p.name}} <small class="product-status" [class.archived]="!!p.archivedAt" [class.unpublished]="!p.archivedAt && !p.active">{{adminProductStatus(p)}}</small></b><small>{{p.sku}} · {{p.category}} · {{money(p.price)}} · المخزون {{p.stock}}</small></div><div><button class="quiet" (click)="editAdminProduct(p)">تعديل</button> @if(p.archivedAt){<button class="quiet" (click)="restoreProduct(p.id)">استعادة</button>}@else{<button class="quiet danger" (click)="archiveProduct(p.id)">أرشفة</button>}</div><div class="wide inventory-adjust"><input type="number" step="1" aria-label="تعديل كمية المخزون" [(ngModel)]="getInventoryDraft(p.id).delta" name="invdelta-{{p.id}}" placeholder="الكمية (+ أو -)"><input aria-label="سبب تعديل المخزون" [(ngModel)]="getInventoryDraft(p.id).reason" name="invreason-{{p.id}}" placeholder="سبب الحركة"><button type="button" class="quiet" (click)="submitInventoryAdjustment(p.id)">تسجيل حركة مخزون</button><button type="button" class="quiet" (click)="loadInventory(p.id)">عرض سجل المخزون</button>@for(m of inventoryMovements[p.id] || [];track m.id){<small>{{m.created_at}} · {{m.quantity_delta > 0 ? '+' : ''}}{{m.quantity_delta}} = {{m.quantity_after}} · {{m.reason}} · {{m.admin_reference}}</small>}</div></article>} @empty {<p class="muted">لا توجد منتجات ضمن هذا الفلتر.</p>}</div>}</div>}
           @if(adminTab==='taxonomy'){<div class="admin-content"><h2>إدارة التصنيفات والعلامات التجارية</h2><p>أرشف العنصر لإخفائه مع الاحتفاظ بعلاقاته. لا يمكن حذفه نهائياً ما دامت هناك منتجات مرتبطة؛ أعد تصنيفها أولاً.</p><form class="admin-product-form" #taxonNgForm="ngForm" (ngSubmit)="saveTaxon(taxonNgForm.valid)"><label>النوع<select name="type" [(ngModel)]="taxonomyDraft.type"><option value="categories">تصنيف</option><option value="brands">علامة تجارية</option></select></label><label>الاسم<input required name="taxonName" [(ngModel)]="taxonomyDraft.name"></label><button class="btn btn-primary">إضافة</button></form><h3>التصنيفات</h3>@for(t of adminCategories;track t.id){<article class="admin-record"><input aria-label="اسم التصنيف" [(ngModel)]="t.name" name="cat-{{t.id}}"><span>{{t.products?.[0]?.count || 0}} منتج مرتبط</span><div><button type="button" (click)="renameTaxon('categories',t)">حفظ الاسم</button><button type="button" (click)="toggleTaxon('categories',t)">{{t.active?'أرشفة':'تفعيل'}}</button><button type="button" (click)="deleteTaxon('categories',t)">حذف</button></div></article>}<h3>العلامات التجارية</h3>@for(t of adminBrands;track t.id){<article class="admin-record"><input aria-label="اسم العلامة التجارية" [(ngModel)]="t.name" name="brand-{{t.id}}"><span>{{t.products?.[0]?.count || 0}} منتج مرتبط</span><div><button type="button" (click)="renameTaxon('brands',t)">حفظ الاسم</button><button type="button" (click)="toggleTaxon('brands',t)">{{t.active?'أرشفة':'تفعيل'}}</button><button type="button" (click)="deleteTaxon('brands',t)">حذف</button></div></article>}</div>}          @if(adminTab==='orders'){
 <div class="admin-content">

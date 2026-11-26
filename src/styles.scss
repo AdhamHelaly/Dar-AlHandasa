@@ -1656,3 +1656,88 @@ a { color: inherit; }
 @media (max-width: 480px) {
   .footer-main { grid-template-columns: 1fr; gap: 20px; }
 }
+
+/* ==========================================================================
+   Admin Overview & Statistics Dashboard
+   ========================================================================== */
+.admin-overview { display: grid; gap: 24px; margin-top: 12px; }
+.overview-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.overview-header h2 { margin: 0 0 4px; }
+.overview-kpis-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.kpi-card { background: #fff; border: 1px solid #e1e7ec; border-radius: 12px; padding: 18px; display: grid; gap: 8px; position: relative; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02); }
+.kpi-card.highlight-blue { border-top: 4px solid #0865c5; }
+.kpi-card.highlight-green { border-top: 4px solid #38a169; }
+.kpi-card.highlight-amber { border-top: 4px solid #dd6b20; }
+.kpi-card.highlight-purple { border-top: 4px solid #805ad5; }
+.kpi-label { font-size: 13px; color: #5f6c7b; font-weight: 600; }
+.kpi-value { font-size: 24px; font-weight: 800; color: #1a202c; }
+.kpi-value small { font-size: 13px; font-weight: 500; color: #718096; }
+.kpi-meta { display: flex; justify-content: space-between; font-size: 12px; color: #4a5568; padding-top: 6px; border-top: 1px dashed #e2e8f0; flex-wrap: wrap; gap: 6px; }
+.kpi-note { font-size: 11px; color: #718096; }
+.kpi-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.kpi-link { font-size: 12px; color: #0865c5; cursor: pointer; text-decoration: none; font-weight: 600; }
+.kpi-link:hover { text-decoration: underline; }
+.kpi-link.warning { color: #b7791f; }
+.badge { display: inline-block; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }
+.badge.danger { background: #fff5f5; color: #c53030; border: 1px solid #feb2b2; }
+.badge.warning { background: #fffaf0; color: #c05621; border: 1px solid #fbd38d; }
+.badge.success { background: #f0fff4; color: #276749; border: 1px solid #9ae6b4; }
+.badge.blue { background: #ebf8ff; color: #2b6cb0; border: 1px solid #bee3f8; }
+
+.overview-chart-card { background: #fff; border: 1px solid #e1e7ec; border-radius: 12px; padding: 20px; display: grid; gap: 16px; }
+.chart-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.chart-header h3 { margin: 0 0 4px; }
+.chart-range-picker { display: flex; gap: 6px; flex-wrap: wrap; }
+.chart-range-picker button { padding: 6px 14px; border: 1px solid #d9e0e6; background: #f8fafc; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: inherit; font-weight: 600; color: #4a5568; }
+.chart-range-picker button.active { background: #0865c5; color: #fff; border-color: #0865c5; }
+
+.chart-container { overflow-x: auto; padding: 24px 0 6px; }
+.chart-bars-wrap { display: flex; align-items: flex-end; gap: 8px; min-width: 100%; height: 190px; padding-bottom: 28px; position: relative; }
+.chart-bar-col { flex: 1; min-width: 26px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; position: relative; }
+.chart-bar { width: 100%; max-width: 32px; background: linear-gradient(180deg, #3182ce 0%, #63b3ed 100%); border-radius: 4px 4px 0 0; transition: height .25s ease; }
+.chart-bar-col:hover .chart-bar { background: linear-gradient(180deg, #2b6cb0 0%, #4299e1 100%); }
+.bar-label { position: absolute; bottom: 0; font-size: 10px; color: #718096; white-space: nowrap; }
+.bar-tooltip { position: absolute; top: -24px; font-size: 10px; color: #1a202c; font-weight: 700; background: #fff; padding: 2px 6px; border-radius: 4px; border: 1px solid #cbd5e0; white-space: nowrap; display: none; z-index: 2; box-shadow: 0 2px 4px rgba(0, 0, 0, .06); }
+.chart-bar-col:hover .bar-tooltip { display: block; }
+
+.overview-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.overview-card { background: #fff; border: 1px solid #e1e7ec; border-radius: 12px; padding: 20px; display: grid; gap: 16px; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card-head h3 { margin: 0; }
+
+.top-products-list, .low-stock-list { display: grid; gap: 10px; }
+.top-product-row, .low-stock-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid #edf2f7; }
+.rank-badge { width: 26px; height: 26px; border-radius: 50%; background: #edf2f7; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #4a5568; flex-shrink: 0; }
+.prod-details, .stock-info { display: grid; gap: 2px; flex: 1; }
+.prod-details b, .stock-info b { font-size: 13px; color: #2d3748; }
+.prod-details small, .stock-info small { font-size: 11px; color: #718096; }
+.prod-stats { text-align: left; display: grid; gap: 2px; }
+.prod-stats span { font-size: 11px; color: #718096; }
+.prod-stats b { font-size: 13px; color: #2b6cb0; }
+
+.stock-actions { display: flex; align-items: center; gap: 8px; }
+.stock-badge { padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; background: #feebc8; color: #7b341e; }
+.stock-badge.zero { background: #fed7d7; color: #9b2c2c; }
+
+.recent-orders-table { overflow-x: auto; }
+.recent-orders-table table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.recent-orders-table th, .recent-orders-table td { padding: 10px 8px; text-align: right; border-bottom: 1px solid #edf2f7; }
+.recent-orders-table th { background: #f8fafc; color: #4a5568; font-weight: 700; }
+.order-id-code { font-family: monospace; background: #f0f4f8; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+.order-method-tag { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; background: #e2e8f0; color: #4a5568; }
+.order-method-tag.whatsapp { background: #e6fffa; color: #234e52; }
+.status-badge { display: inline-block; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }
+.status-badge.status-confirmed, .status-badge.status-delivered { background: #f0fff4; color: #22543d; }
+.status-badge.status-pending { background: #fffaf0; color: #744210; }
+.status-badge.status-shipped, .status-badge.status-processing { background: #ebf8ff; color: #2b6cb0; }
+.status-badge.status-cancelled, .status-badge.status-expired { background: #fff5f5; color: #742a2a; }
+
+.success-text { color: #276749; }
+.center-text { text-align: center; padding: 20px 0; }
+
+@media (max-width: 880px) {
+  .overview-grid-2 { grid-template-columns: 1fr; }
+}
+@media (max-width: 540px) {
+  .overview-kpis-grid { grid-template-columns: 1fr; }
+}
