@@ -1,7 +1,8 @@
 # نشر دار الهندسة على Vercel (واجهة + API)
 
-كل شيء يعمل على مشروع Vercel واحد. لا يوجد Render، ولا قاعدة بيانات جديدة، ولا تغيير
-في قاعدة Production.
+كل شيء يعمل على مشروع Vercel واحد. لا يوجد Render، ولا قاعدة بيانات جديدة. الواجهة
+والـ API متصلان الآن بقاعدة **Production** الحالية (`ipegazjnkejasorskdur`)، وهي قاعدة
+البيانات الوحيدة المستخدمة في النشر.
 
 ## المعمارية
 
@@ -14,7 +15,7 @@ Vercel
    └── /api/*       → Serverless Function: api/[...path].mjs
                          └── server.mjs  (نفس الراوتر المستخدم محليًا)
    ▼
-Supabase Staging (bmmrjbyxmzwrohuprrwa)
+Supabase Production (ipegazjnkejasorskdur)
 ```
 
 - الواجهة تستدعي `/api` نسبيًا، فالمتصفح يرى نفس الأصل (لا CORS مفتوح).
@@ -49,17 +50,16 @@ Supabase Staging (bmmrjbyxmzwrohuprrwa)
 
 | المتغير | القيمة |
 |---|---|
-| `APP_ENV` | `staging` |
+| `APP_ENV` | `production` |
 | `IS_CLOUD_DEPLOYMENT` | `true` |
 | `WHATSAPP_RESERVATION_WORKER_ENABLED` | `false` |
-| `STAGING_SUPABASE_PROJECT_REF` | `bmmrjbyxmzwrohuprrwa` |
-| `SUPABASE_URL` | `https://bmmrjbyxmzwrohuprrwa.supabase.co` |
+| `SUPABASE_URL` | `https://ipegazjnkejasorskdur.supabase.co` |
 | `FRONTEND_ORIGIN` | `https://dar-al-handasa-preview.vercel.app` |
 | `PRODUCT_IMAGE_MAX_BYTES` | `4000000` |
-| `SUPABASE_SERVICE_ROLE_KEY` | من `.env.staging` |
-| `SESSION_SECRET` | من `.env.staging` (32 حرفًا على الأقل) |
-| `ADMIN_EMAIL` | من `.env.staging` |
-| `ADMIN_PASSWORD` | من `.env.staging` |
+| `SUPABASE_SERVICE_ROLE_KEY` | مفتاح Production (Secret) |
+| `SESSION_SECRET` | سر عشوائي 96 حرفًا (Secret) |
+| `ADMIN_EMAIL` | بريد مدير المتجر |
+| `ADMIN_PASSWORD` | كلمة مرور المدير (Secret) |
 
 `NODE_ENV=production` يضبطه Vercel تلقائيًا. لا حاجة لـ `API_PORT` أو `API_HOST`.
 
@@ -97,8 +97,7 @@ Invoke-RestMethod https://dar-al-handasa-preview.vercel.app/api/health
 الرد المتوقع من `/api/health`:
 
 ```json
-{ "status": "ok", "database": "supabase", "environment": "staging",
-  "supabaseProjectRef": "bmmrjbyxmzwrohuprrwa",
+{ "status": "ok", "database": "supabase", "environment": "production",
   "reservationWorker": { "enabled": false } }
 ```
 
@@ -106,17 +105,26 @@ Invoke-RestMethod https://dar-al-handasa-preview.vercel.app/api/health
 
 | العرض | السبب | الحل |
 |---|---|---|
-| `FUNCTION_INVOCATION_FAILED` | خطأ أثناء تحميل الوحدة (بيانات ناقصة) | راجع Logs في Vercel ورسالة `Invalid staging configuration` |
+| `FUNCTION_INVOCATION_FAILED` | خطأ أثناء تحميل الوحدة (بيانات ناقصة) | راجع Logs في Vercel (رسالة مثل `Invalid staging configuration` أو `supabase_not_configured`) |
 | `403 origin_not_allowed` | الطلب من رابط معاينة عشوائي | استخدم النطاق الثابت أو حدّث `FRONTEND_ORIGIN` |
 | `503 supabase_not_configured` | متغيرات Supabase ناقصة | أضفها ثم أعد النشر |
 | `413 image_too_large` | الصورة أكبر من 4MB | صغّر الصورة (حد Vercel) |
 | المنتجات تظهر بعد تأخير بسيط | Cold Start | طبيعي على الخطة المجانية |
 
-## Production لاحقًا (بموافقة صريحة)
+## بيئة Staging المحلية (اختيارية)
 
-1. غيّر `APP_ENV` إلى `production` وأزل `STAGING_SUPABASE_PROJECT_REF`.
-2. اضبط `SUPABASE_URL` و`SUPABASE_SERVICE_ROLE_KEY` على مشروع Production الحالي.
-3. اضبط `FRONTEND_ORIGIN` على النطاق النهائي.
-4. اختبر `/api/health` وكل الوظائف، ثم اعتمد النشر.
+قاعدة Staging (`bmmrjbyxmzwrohuprrwa`) لم تعد مستخدمة في النشر. تبقى فقط للاختبارات
+المحلية المعزولة عبر `.env.staging` والمنفذ `3203`، ولا تُوجَّه أي كتابة إلى Production.
 
-لا تُجرى أي كتابة على Production أثناء اختبارات Staging.
+قبل أي اختبار كتابة على Staging:
+
+1. شغّل الـ API على `127.0.0.1:3203` مع `--env=staging`.
+2. تأكد أن `/api/health` يعرض `environment=staging` و`supabaseProjectRef=bmmrjbyxmzwrohuprrwa`.
+3. لا تختبر الكتابة (Checkout / رفع صور) على النطاق المنشور لأنه متصل بـ Production.
+
+## قاعدة Production
+
+- المشروع: `ipegazjnkejasorskdur`.
+- المفتاح المستخدم من نوع `sb_secret_...` ويُرسَل من الـ Function فقط (Node fetch).
+- لا تُنشئ سجلات اختبار على Production، ولا تحذف أي بيانات أعمال؛ الأرشفة فقط.
+- أي عملية كتابة على Production تتم بموافقة صريحة فقط.
